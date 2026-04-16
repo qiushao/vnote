@@ -1,0 +1,30 @@
+add_qt_test(test_tagfilemodel
+  SOURCES
+    test_tagfilemodel.cpp
+    ${CMAKE_SOURCE_DIR}/src/models/tagfilemodel.cpp
+  LINKS
+    core_services
+    vxcore
+  GUILESS
+)
+
+add_qt_test(test_attachmentmodel
+  SOURCES
+    test_attachmentmodel.cpp
+    ${CMAKE_SOURCE_DIR}/src/models/attachmentlistmodel.cpp
+  LINKS
+    core_services
+    vxcore
+    Qt6::Widgets
+  GUILESS
+)
+
+add_qt_test(test_snippetmodel
+  SOURCES
+    test_snippetmodel.cpp
+    ${CMAKE_SOURCE_DIR}/src/models/snippetlistmodel.cpp
+  LINKS
+    core_services
+    vxcore
+  GUILESS
+)

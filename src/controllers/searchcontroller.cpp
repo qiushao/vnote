@@ -1,0 +1,437 @@
+#include "searchcontroller.h"
+
+#include <QDebug>
+#include <QHash>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonValue>
+#include <QModelIndex>
+#include <QSet>
+#include <QStringList>
+
+#include <core/error.h>
+#include <core/fileopensettings.h>
+#include <core/nodeidentifier.h>
+#include <core/servicelocator.h>
+#include <core/services/bufferservice.h>
+#include <core/services/notebookcoreservice.h>
+#include <core/services/searchservice.h>
+#include <models/searchresultmodel.h>
+
+using namespace vnotex;
+
+SearchController::SearchController(ServiceLocator &p_services, QObject *p_parent)
+    : QObject(p_parent), m_services(p_services) {
+  auto *searchSvc = m_services.get<SearchService>();
+  if (!searchSvc) {
+    return;
+  }
+
+  connect(searchSvc, &SearchService::searchFinished, this, &SearchController::onSearchFinished);
+  connect(searchSvc, &SearchService::searchFailed, this, &SearchController::onSearchFailed);
+  connect(searchSvc, &SearchService::searchCancelled, this, &SearchController::onSearchCancelled);
+  connect(searchSvc, &SearchService::searchProgress, this, [this](int p_token, int p_percent) {
+    if (!m_activeTokens.contains(p_token) && !m_expectingStartSignal) {
+      return;
+    }
+    emit progressUpdated(p_percent);
+  });
+  connect(searchSvc, &SearchService::searchStarted, this, [this](int p_token) {
+    if (!m_activeTokens.contains(p_token) && !m_expectingStartSignal) {
+      return;
+    }
+    emit searchStarted();
+  });
+}
+
+void SearchController::setModel(SearchResultModel *p_model) { m_model = p_model; }
+
+void SearchController::setCurrentNotebookId(const QString &p_notebookId) {
+  m_currentNotebookId = p_notebookId;
+}
+
+void SearchController::setCurrentFolderId(const NodeIdentifier &p_folderId) {
+  m_currentFolderId = p_folderId;
+}
+
+void SearchController::search(const QString &p_keyword, int p_scope, int p_searchMode,
+                              bool p_caseSensitive, bool p_useRegex, const QString &p_filePattern) {
+  qDebug() << "SearchController::search: keyword:" << p_keyword << "scope:" << p_scope
+           << "mode:" << p_searchMode << "caseSensitive:" << p_caseSensitive
+           << "regex:" << p_useRegex << "filePattern:" << p_filePattern;
+
+  resetSearchState();
+  if (m_model) {
+    m_model->clear();
+  }
+
+  m_activeSearchMode = p_searchMode;
+
+  m_lastKeyword = p_keyword;
+  m_lastFindOptions = FindNone;
+  if (p_caseSensitive) {
+    m_lastFindOptions |= CaseSensitive;
+  }
+  if (p_useRegex) {
+    m_lastFindOptions |= RegularExpression;
+  }
+
+  m_queryJson = buildQueryJson(p_keyword, p_searchMode, p_caseSensitive, p_useRegex, p_filePattern);
+  if (m_queryJson.isEmpty()) {
+    emit searchFailed(tr("Failed to build search query."));
+    return;
+  }
+
+  switch (p_scope) {
+  case AllNotebooks: {
+    auto *notebookSvc = m_services.get<NotebookCoreService>();
+    if (!notebookSvc) {
+      emit searchFailed(tr("Notebook service is not available."));
+      return;
+    }
+
+    const QJsonArray notebooks = notebookSvc->listNotebooks();
+    for (const QJsonValue &val : notebooks) {
+      const QString notebookId = val.toObject().value(QStringLiteral("id")).toString();
+      if (!notebookId.isEmpty()) {
+        SearchTarget target;
+        target.notebookId = notebookId;
+        m_pendingTargets.append(target);
+      }
+    }
+    break;
+  }
+
+  case CurrentNotebook: {
+    if (m_currentNotebookId.isEmpty()) {
+      emit searchFailed(tr("No current notebook selected."));
+      return;
+    }
+
+    SearchTarget target;
+    target.notebookId = m_currentNotebookId;
+    m_pendingTargets.append(target);
+    break;
+  }
+
+  case CurrentFolder: {
+    if (!m_currentFolderId.isValid()) {
+      emit searchFailed(tr("No current folder selected."));
+      return;
+    }
+
+    SearchTarget target;
+    target.notebookId = m_currentFolderId.notebookId;
+    if (!m_currentFolderId.relativePath.isEmpty()) {
+      target.inputFilesJson = buildFoldersInputFilesJson(m_currentFolderId.relativePath);
+    }
+    m_pendingTargets.append(target);
+    break;
+  }
+
+  case Buffers: {
+    auto *bufferSvc = m_services.get<BufferService>();
+    if (!bufferSvc) {
+      emit searchFailed(tr("Buffer service is not available."));
+      return;
+    }
+
+    const QJsonArray buffers = bufferSvc->listBuffers();
+    QHash<QString, QSet<QString>> filesByNotebook;
+    for (const QJsonValue &val : buffers) {
+      const QJsonObject obj = val.toObject();
+      const QString notebookId = obj.value(QStringLiteral("notebookId")).toString();
+      QString filePath = obj.value(QStringLiteral("path")).toString();
+      if (filePath.isEmpty()) {
+        filePath = obj.value(QStringLiteral("filePath")).toString();
+      }
+
+      if (!notebookId.isEmpty() && !filePath.isEmpty()) {
+        filesByNotebook[notebookId].insert(filePath);
+      }
+    }
+
+    for (auto it = filesByNotebook.constBegin(); it != filesByNotebook.constEnd(); ++it) {
+      SearchTarget target;
+      target.notebookId = it.key();
+      target.inputFilesJson = buildFilesInputFilesJson(it.value().values());
+      m_pendingTargets.append(target);
+    }
+    break;
+  }
+
+  default:
+    emit searchFailed(tr("Invalid search scope."));
+    return;
+  }
+
+  if (m_pendingTargets.isEmpty()) {
+    qDebug() << "SearchController::search: no targets found, emitting empty result";
+    if (m_model) {
+      m_model->setSearchResult(m_accumulatedResult);
+    }
+    emit searchFinished(0, false);
+    return;
+  }
+
+  qDebug() << "SearchController::search: pendingTargets:" << m_pendingTargets.size();
+  startNextSearch();
+}
+
+void SearchController::cancel() {
+  qDebug() << "SearchController::cancel: cancelling search";
+  m_cancelRequested = true;
+  m_pendingTargets.clear();
+
+  auto *searchSvc = m_services.get<SearchService>();
+  if (searchSvc) {
+    for (int token : m_activeTokens) {
+      searchSvc->cancel(token);
+    }
+  }
+  m_activeTokens.clear();
+}
+
+void SearchController::activateResult(const QModelIndex &p_index) {
+  if (!p_index.isValid() || !m_model) {
+    return;
+  }
+
+  QVariant nodeIdVar = m_model->data(p_index, SearchResultModel::NodeIdRole);
+  if (!nodeIdVar.isValid()) {
+    return;
+  }
+
+  NodeIdentifier nodeId = nodeIdVar.value<NodeIdentifier>();
+  if (!nodeId.isValid()) {
+    return;
+  }
+
+  FileOpenSettings settings;
+  int lineNumber = m_model->data(p_index, SearchResultModel::LineNumberRole).toInt();
+  if (lineNumber >= 0) {
+    settings.m_lineNumber = lineNumber;
+  }
+
+  if (m_activeSearchMode == ContentSearch && !m_lastKeyword.isEmpty()) {
+    SearchHighlightContext ctx;
+    ctx.m_patterns = QStringList{m_lastKeyword};
+    ctx.m_options = m_lastFindOptions;
+    ctx.m_currentMatchLine = lineNumber;
+    ctx.m_isValid = true;
+    settings.m_searchHighlight = ctx;
+  }
+
+  qDebug() << "SearchController::activateResult: notebookId:" << nodeId.notebookId
+           << "path:" << nodeId.relativePath << "lineNumber:" << lineNumber;
+
+  emit nodeActivated(nodeId, settings);
+}
+
+void SearchController::onSearchFinished(int p_token, const SearchResult &p_result) {
+  if (!m_activeTokens.contains(p_token)) {
+    qDebug() << "SearchController::onSearchFinished: discarding stale token:" << p_token;
+    return;
+  }
+  m_activeTokens.remove(p_token);
+
+  qDebug() << "SearchController::onSearchFinished: matchCount:" << p_result.m_matchCount
+           << "fileResults:" << p_result.m_fileResults.size()
+           << "truncated:" << p_result.m_truncated << "pendingTargets:" << m_pendingTargets.size();
+
+  mergeSearchResult(p_result);
+
+  if (m_cancelRequested) {
+    return;
+  }
+
+  if (!m_pendingTargets.isEmpty()) {
+    startNextSearch();
+    return;
+  }
+
+  if (m_activeTokens.isEmpty() && m_pendingTargets.isEmpty()) {
+    if (m_model) {
+      m_model->setSearchResult(m_accumulatedResult);
+    }
+
+    emit searchFinished(m_accumulatedResult.m_matchCount, m_accumulatedResult.m_truncated);
+    resetSearchState();
+  }
+}
+
+void SearchController::onSearchFailed(int p_token, const Error &p_error) {
+  if (!m_activeTokens.contains(p_token)) {
+    qDebug() << "SearchController::onSearchFailed: discarding stale token:" << p_token;
+    return;
+  }
+  m_activeTokens.remove(p_token);
+
+  QString message = p_error.message();
+  if (message.isEmpty()) {
+    message = p_error.what();
+  }
+
+  qWarning() << "SearchController::onSearchFailed:" << message;
+
+  emit searchFailed(message);
+  resetSearchState();
+}
+
+void SearchController::onSearchCancelled(int p_token) {
+  if (!m_activeTokens.contains(p_token)) {
+    qDebug() << "SearchController::onSearchCancelled: discarding stale token:" << p_token;
+    return;
+  }
+  m_activeTokens.remove(p_token);
+
+  qDebug() << "SearchController::onSearchCancelled";
+  emit searchCancelled();
+  resetSearchState();
+}
+
+QString SearchController::buildQueryJson(const QString &p_keyword, int p_searchMode,
+                                         bool p_caseSensitive, bool p_useRegex,
+                                         const QString &p_filePattern) const {
+  QJsonObject queryObj;
+
+  switch (p_searchMode) {
+  case ContentSearch:
+    queryObj.insert(QStringLiteral("pattern"), QJsonValue(p_keyword));
+    queryObj.insert(QStringLiteral("caseSensitive"), QJsonValue(p_caseSensitive));
+    queryObj.insert(QStringLiteral("wholeWord"), QJsonValue(false));
+    queryObj.insert(QStringLiteral("regex"), QJsonValue(p_useRegex));
+    queryObj.insert(QStringLiteral("maxResults"), QJsonValue(500));
+    break;
+
+  case FileNameSearch:
+    queryObj.insert(QStringLiteral("pattern"), QJsonValue(p_keyword));
+    queryObj.insert(QStringLiteral("includeFiles"), QJsonValue(true));
+    queryObj.insert(QStringLiteral("includeFolders"), QJsonValue(true));
+    queryObj.insert(QStringLiteral("maxResults"), QJsonValue(500));
+    break;
+
+  case TagSearch: {
+    QJsonArray tags;
+    const QStringList tagList = p_keyword.split(QLatin1Char(','), Qt::SkipEmptyParts);
+    for (const QString &tag : tagList) {
+      const QString trimmed = tag.trimmed();
+      if (!trimmed.isEmpty()) {
+        tags.append(trimmed);
+      }
+    }
+
+    if (tags.isEmpty() && !p_keyword.trimmed().isEmpty()) {
+      tags.append(p_keyword.trimmed());
+    }
+
+    queryObj.insert(QStringLiteral("tags"), tags);
+    queryObj.insert(QStringLiteral("operator"), QJsonValue(QStringLiteral("AND")));
+    queryObj.insert(QStringLiteral("maxResults"), QJsonValue(500));
+    break;
+  }
+
+  default:
+    return QString();
+  }
+
+  if (!p_filePattern.isEmpty()) {
+    QJsonObject scopeObj;
+    QJsonArray filePatterns;
+    filePatterns.append(p_filePattern);
+    scopeObj.insert(QStringLiteral("filePatterns"), filePatterns);
+    queryObj.insert(QStringLiteral("scope"), scopeObj);
+  }
+
+  return QString::fromUtf8(QJsonDocument(queryObj).toJson(QJsonDocument::Compact));
+}
+
+QString SearchController::buildFoldersInputFilesJson(const QString &p_folderPath) const {
+  QJsonObject inputObj;
+  QJsonArray folders;
+  folders.append(p_folderPath);
+  inputObj.insert(QStringLiteral("folders"), folders);
+  return QString::fromUtf8(QJsonDocument(inputObj).toJson(QJsonDocument::Compact));
+}
+
+QString SearchController::buildFilesInputFilesJson(const QStringList &p_files) const {
+  QJsonObject inputObj;
+  QJsonArray files;
+  for (const QString &file : p_files) {
+    files.append(file);
+  }
+  inputObj.insert(QStringLiteral("files"), files);
+  return QString::fromUtf8(QJsonDocument(inputObj).toJson(QJsonDocument::Compact));
+}
+
+void SearchController::dispatchSearch(const SearchTarget &p_target) {
+  qDebug() << "SearchController::dispatchSearch: notebookId:" << p_target.notebookId
+           << "mode:" << m_activeSearchMode
+           << "hasInputFiles:" << !p_target.inputFilesJson.isEmpty();
+
+  auto *searchSvc = m_services.get<SearchService>();
+  if (!searchSvc) {
+    qWarning() << "SearchController::dispatchSearch: SearchService not available";
+    emit searchFailed(tr("Search service is not available."));
+    resetSearchState();
+    return;
+  }
+
+  int token = 0;
+  m_expectingStartSignal = true;
+  switch (m_activeSearchMode) {
+  case FileNameSearch:
+    token = searchSvc->searchFiles(p_target.notebookId, m_queryJson, p_target.inputFilesJson);
+    break;
+
+  case ContentSearch:
+    token = searchSvc->searchContent(p_target.notebookId, m_queryJson, p_target.inputFilesJson);
+    break;
+
+  case TagSearch:
+    token = searchSvc->searchByTags(p_target.notebookId, m_queryJson, p_target.inputFilesJson);
+    break;
+
+  default:
+    m_expectingStartSignal = false;
+    emit searchFailed(tr("Invalid search mode."));
+    resetSearchState();
+    return;
+  }
+  m_expectingStartSignal = false;
+
+  if (token > 0) {
+    m_activeTokens.insert(token);
+  }
+}
+
+void SearchController::startNextSearch() {
+  if (m_pendingTargets.isEmpty()) {
+    return;
+  }
+
+  qDebug() << "SearchController::startNextSearch: remaining:" << m_pendingTargets.size();
+
+  const SearchTarget target = m_pendingTargets.takeFirst();
+  dispatchSearch(target);
+}
+
+void SearchController::resetSearchState() {
+  m_pendingTargets.clear();
+  m_activeTokens.clear();
+  m_accumulatedResult = SearchResult();
+  m_queryJson.clear();
+  m_cancelRequested = false;
+}
+
+void SearchController::mergeSearchResult(const SearchResult &p_result) {
+  m_accumulatedResult.m_fileResults += p_result.m_fileResults;
+  m_accumulatedResult.m_matchCount += p_result.m_matchCount;
+  m_accumulatedResult.m_truncated = m_accumulatedResult.m_truncated || p_result.m_truncated;
+
+  qDebug() << "SearchController::mergeSearchResult: accumulated matchCount:"
+           << m_accumulatedResult.m_matchCount
+           << "fileResults:" << m_accumulatedResult.m_fileResults.size()
+           << "truncated:" << m_accumulatedResult.m_truncated;
+}

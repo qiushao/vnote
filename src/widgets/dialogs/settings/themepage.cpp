@@ -1,0 +1,175 @@
+#include "themepage.h"
+
+#include <QComboBox>
+#include <QDebug>
+#include <QGridLayout>
+#include <QGroupBox>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QScrollArea>
+#include <QUrl>
+#include <QVBoxLayout>
+
+#include <QListWidgetItem>
+#include <QPushButton>
+#include <core/configmgr2.h>
+#include <core/coreconfig.h>
+#include <core/servicelocator.h>
+#include <gui/services/themeservice.h>
+#include <utils/widgetutils.h>
+#include <widgets/listwidget.h>
+#include <widgets/widgetsfactory.h>
+
+#include "settingspagehelper.h"
+
+using namespace vnotex;
+
+ThemePage::ThemePage(ServiceLocator &p_services, QWidget *p_parent)
+    : SettingsPage(p_services, p_parent) {
+  setupUI();
+}
+
+void ThemePage::setupUI() {
+  auto *mainLayout = new QVBoxLayout(this);
+
+  auto *cardLayout = SettingsPageHelper::addSection(mainLayout, tr("Theme"), QString(), this);
+
+  // Theme content inside card.
+  {
+    auto *contentWidget = new QWidget(this);
+    auto *layout = new QGridLayout(contentWidget);
+
+    m_themeListWidget = new ListWidget(this);
+    layout->addWidget(m_themeListWidget, 0, 0, 3, 2);
+    connect(m_themeListWidget, &QListWidget::currentItemChanged, this,
+            [this](QListWidgetItem *p_current, QListWidgetItem *p_previous) {
+              Q_UNUSED(p_previous);
+              loadThemePreview(p_current ? p_current->data(Qt::UserRole).toString() : QString());
+              pageIsChangedWithRestartNeeded();
+            });
+
+    auto refreshBtn = new QPushButton(tr("Refresh"), this);
+    layout->addWidget(refreshBtn, 3, 0, 1, 1);
+    connect(refreshBtn, &QPushButton::clicked, this, [this]() {
+      auto *themeService = m_services.get<ThemeService>();
+      if (themeService) {
+        themeService->refresh();
+        loadThemes();
+      }
+    });
+
+    auto addBtn = new QPushButton(tr("Add/Delete"), this);
+    layout->addWidget(addBtn, 3, 1, 1, 1);
+    connect(addBtn, &QPushButton::clicked, this, [this]() {
+      auto *configMgr = m_services.get<ConfigMgr2>();
+      if (configMgr) {
+        WidgetUtils::openUrlByDesktop(
+            QUrl::fromLocalFile(configMgr->getConfigDataFolder(ConfigMgr2::ConfigDataType::Themes)));
+      }
+    });
+
+    auto updateBtn = new QPushButton(tr("Update"), this);
+    layout->addWidget(updateBtn, 4, 0, 1, 1);
+
+    auto openLocationBtn = new QPushButton(tr("Open Location"), this);
+    layout->addWidget(openLocationBtn, 4, 1, 1, 1);
+    connect(openLocationBtn, &QPushButton::clicked, this, [this]() {
+      auto *themeService = m_services.get<ThemeService>();
+      if (themeService) {
+        auto theme = themeService->findTheme(currentTheme());
+        if (theme) {
+          WidgetUtils::openUrlByDesktop(QUrl::fromLocalFile(theme->m_folderPath));
+        }
+      }
+    });
+
+    m_noPreviewText = tr("No Preview Available");
+    m_previewLabel = new QLabel(m_noPreviewText, this);
+    m_previewLabel->setScaledContents(true);
+    m_previewLabel->setAlignment(Qt::AlignCenter | Qt::AlignVCenter);
+    auto scrollArea = new QScrollArea(this);
+    scrollArea->setBackgroundRole(QPalette::Dark);
+    scrollArea->setWidget(m_previewLabel);
+    scrollArea->setMinimumSize(256, 256);
+    layout->addWidget(scrollArea, 0, 2, 5, 1);
+
+    // Add content widget with padding.
+    contentWidget->setContentsMargins(8, 0, 8, 8);
+    cardLayout->addWidget(contentWidget);
+  }
+
+  mainLayout->addStretch();
+}
+
+void ThemePage::loadInternal() { loadThemes(); }
+
+bool ThemePage::saveInternal() {
+  auto theme = currentTheme();
+  if (!theme.isEmpty()) {
+    m_services.get<ConfigMgr2>()->getCoreConfig().setTheme(theme);
+  }
+
+  return true;
+}
+
+QString ThemePage::title() const { return tr("Theme"); }
+
+void ThemePage::loadThemes() {
+  auto *themeService = m_services.get<ThemeService>();
+  if (!themeService) {
+    return;
+  }
+
+  const auto &themes = themeService->getAllThemes();
+
+  m_themeListWidget->clear();
+  for (const auto &info : themes) {
+    auto item = new QListWidgetItem(info.m_displayName, m_themeListWidget);
+    item->setData(Qt::UserRole, info.m_name);
+    item->setToolTip(info.m_folderPath);
+  }
+
+  // Set current theme.
+  bool found = false;
+  const auto curThemeName = themeService->getCurrentTheme().name();
+  for (int i = 0; i < m_themeListWidget->count(); ++i) {
+    if (m_themeListWidget->item(i)->data(Qt::UserRole).toString() == curThemeName) {
+      m_themeListWidget->setCurrentRow(i);
+      found = true;
+      break;
+    }
+  }
+
+  if (!found && m_themeListWidget->count() > 0) {
+    m_themeListWidget->setCurrentRow(0);
+  }
+}
+
+void ThemePage::loadThemePreview(const QString &p_name) {
+  if (p_name.isEmpty()) {
+    m_previewLabel->setText(m_noPreviewText);
+  }
+
+  auto *themeService = m_services.get<ThemeService>();
+  if (!themeService) {
+    m_previewLabel->setText(m_noPreviewText);
+    return;
+  }
+
+  auto pixmap = themeService->getThemePreview(p_name);
+  if (pixmap.isNull()) {
+    m_previewLabel->setText(m_noPreviewText);
+  } else {
+    const int pwidth = 512;
+    m_previewLabel->setPixmap(pixmap.scaledToWidth(pwidth, Qt::SmoothTransformation));
+  }
+  m_previewLabel->adjustSize();
+}
+
+QString ThemePage::currentTheme() const {
+  auto item = m_themeListWidget->currentItem();
+  if (item) {
+    return item->data(Qt::UserRole).toString();
+  }
+  return QString();
+}
