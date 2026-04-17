@@ -21,6 +21,7 @@ build*
 dev.sh
 nul
 .sisyphus
+.idea
 
 # GitHub Spec Kit related files.
 .claude
