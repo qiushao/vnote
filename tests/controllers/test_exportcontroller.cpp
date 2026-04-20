@@ -1,7 +1,11 @@
 #include <QtTest>
 
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QMetaObject>
 #include <QSignalSpy>
 #include <QWidget>
@@ -142,9 +146,17 @@ QString Exporter::doExportFile(const ExportOption &p_option, const QString &p_co
   return outputPath;
 }
 
-QStringList Exporter::doExportBatch(const ExportOption &, const QVector<ExportFileInfo> &,
+QStringList Exporter::doExportBatch(const ExportOption &, const QVector<ExportFileInfo> &p_files,
                                     const QString &) {
-  return QStringList();
+  QStringList files;
+  for (const auto &file : p_files) {
+    if (!file.isSectionHeading) {
+      files << QStringLiteral("%1|headingLevelOffset=%2")
+                   .arg(file.filePath)
+                   .arg(file.headingLevelOffset);
+    }
+  }
+  return files;
 }
 
 void Exporter::stop() {}
@@ -162,7 +174,10 @@ private slots:
 
   void testConstruction();
   void testMarkdownExportContentBased();
+  void testMarkdownExportExternalBuffer();
   void testMarkdownExportDiskBased();
+  void testAllInOneFolderExportIncludesExternalFilesystemFiles();
+  void testFolderExportSkipsStaleAndEscapedIndexedEntries();
   void testEmptyContextHandling();
 
 private:
@@ -193,6 +208,7 @@ private:
   VxCoreContextHandle m_ctx = nullptr;
   TempDirFixture m_tempDir;
   QString m_notebookId;
+  QString m_notebookRoot;
 };
 
 void TestExportController::initTestCase() {
@@ -205,7 +221,8 @@ void TestExportController::initTestCase() {
   QVERIFY(m_tempDir.isValid());
 
   char *notebookId = nullptr;
-  QByteArray notebookPath = m_tempDir.filePath(QStringLiteral("controller_notebook")).toUtf8();
+  m_notebookRoot = m_tempDir.filePath(QStringLiteral("controller_notebook"));
+  QByteArray notebookPath = m_notebookRoot.toUtf8();
   err = vxcore_notebook_create(m_ctx, notebookPath.constData(), "{\"name\":\"ControllerNotebook\"}",
                                VXCORE_NOTEBOOK_BUNDLED, &notebookId);
   QVERIFY2(err == VXCORE_OK, "Failed to create test notebook");
@@ -307,6 +324,46 @@ void TestExportController::testMarkdownExportContentBased() {
   QVERIFY(exportedContent.contains(QStringLiteral("# Hello World")));
 }
 
+void TestExportController::testMarkdownExportExternalBuffer() {
+  ControllerFixture fixture(m_ctx);
+
+  TempDirFixture sourceDir;
+  QVERIFY(sourceDir.isValid());
+  const QString sourcePath = sourceDir.filePath(QStringLiteral("external.md"));
+  QFile sourceFile(sourcePath);
+  QVERIFY(sourceFile.open(QIODevice::WriteOnly));
+  sourceFile.write("# External File\nFrom plain open");
+  sourceFile.close();
+
+  TempDirFixture outputDir;
+  QVERIFY(outputDir.isValid());
+
+  vnotex::ExportContext context;
+  context.bufferPath = sourcePath;
+  context.bufferName = QStringLiteral("external.md");
+  context.presetSource = vnotex::ExportSource::CurrentBuffer;
+
+  vnotex::ExportOption option;
+  option.m_source = vnotex::ExportSource::CurrentBuffer;
+  option.m_targetFormat = vnotex::ExportFormat::Markdown;
+  option.m_outputDir = outputDir.path();
+  option.m_recursive = false;
+  option.m_exportAttachments = false;
+
+  QSignalSpy finishedSpy(fixture.controller, &vnotex::ExportController::exportFinished);
+  fixture.controller->doExport(option, context);
+
+  QCOMPARE(finishedSpy.count(), 1);
+  const QStringList outputFiles = finishedSpy.takeFirst().at(0).toStringList();
+  QVERIFY(!outputFiles.isEmpty());
+
+  QFile exportedFile(outputFiles.first());
+  QVERIFY(exportedFile.exists());
+  QVERIFY(exportedFile.open(QIODevice::ReadOnly));
+  const QString exportedContent = QString::fromUtf8(exportedFile.readAll());
+  QVERIFY(exportedContent.contains(QStringLiteral("# External File")));
+}
+
 void TestExportController::testMarkdownExportDiskBased() {
   ControllerFixture fixture(m_ctx);
   const QString relativePath = QStringLiteral("test_disk_based.md");
@@ -340,6 +397,168 @@ void TestExportController::testMarkdownExportDiskBased() {
   QVERIFY(exportedFile.open(QIODevice::ReadOnly));
   const QString exportedContent = QString::fromUtf8(exportedFile.readAll());
   QVERIFY(exportedContent.contains(QStringLiteral("# Disk Content")));
+}
+
+void TestExportController::testAllInOneFolderExportIncludesExternalFilesystemFiles() {
+  ControllerFixture fixture(m_ctx);
+
+  QDir rootDir(m_notebookRoot);
+  QVERIFY(rootDir.mkpath(QStringLiteral("external_folder/sub")));
+
+  QFile first(rootDir.filePath(QStringLiteral("external_folder/2.md")));
+  QVERIFY(first.open(QIODevice::WriteOnly));
+  first.write("# External 2\n");
+  first.close();
+
+  QFile second(rootDir.filePath(QStringLiteral("external_folder/sub/1.md")));
+  QVERIFY(second.open(QIODevice::WriteOnly));
+  second.write("# External 1\n");
+  second.close();
+
+  QFile ignored(rootDir.filePath(QStringLiteral("external_folder/sub/ignored.txt")));
+  QVERIFY(ignored.open(QIODevice::WriteOnly));
+  ignored.write("not markdown\n");
+  ignored.close();
+
+  TempDirFixture outputDir;
+  QVERIFY(outputDir.isValid());
+
+  vnotex::ExportContext context;
+  context.currentFolderId = vnotex::NodeIdentifier{m_notebookId, QStringLiteral("external_folder")};
+  context.presetSource = vnotex::ExportSource::CurrentFolder;
+
+  vnotex::ExportOption option;
+  option.m_source = vnotex::ExportSource::CurrentFolder;
+  option.m_targetFormat = vnotex::ExportFormat::PDF;
+  option.m_outputDir = outputDir.path();
+  option.m_recursive = true;
+  option.m_exportAttachments = false;
+  option.m_pdfOption.m_allInOne = true;
+
+  QSignalSpy finishedSpy(fixture.controller, &vnotex::ExportController::exportFinished);
+  fixture.controller->doExport(option, context);
+
+  QCOMPARE(finishedSpy.count(), 1);
+  const QStringList outputFiles = finishedSpy.takeFirst().at(0).toStringList();
+  QCOMPARE(outputFiles.size(), 2);
+  QVERIFY(
+      outputFiles.at(0).contains(QStringLiteral("external_folder/2.md|headingLevelOffset=1")));
+  QVERIFY(
+      outputFiles.at(1).contains(QStringLiteral("external_folder/sub/1.md|headingLevelOffset=2")));
+}
+
+void TestExportController::testFolderExportSkipsStaleAndEscapedIndexedEntries() {
+  TempDirFixture notebookDir;
+  QVERIFY(notebookDir.isValid());
+
+  char *notebookId = nullptr;
+  const QByteArray notebookPath = notebookDir.filePath(QStringLiteral("stale_notebook")).toUtf8();
+  VxCoreError err = vxcore_notebook_create(m_ctx, notebookPath.constData(),
+                                           "{\"name\":\"StaleNotebook\"}",
+                                           VXCORE_NOTEBOOK_BUNDLED, &notebookId);
+  QVERIFY2(err == VXCORE_OK, "Failed to create stale test notebook");
+  QVERIFY(notebookId != nullptr);
+  QString notebookIdStr = QString::fromUtf8(notebookId);
+  vxcore_string_free(notebookId);
+
+  QVERIFY(vxcore_notebook_close(m_ctx, notebookIdStr.toUtf8().constData()) == VXCORE_OK);
+
+  QDir rootDir(notebookDir.filePath(QStringLiteral("stale_notebook")));
+  QVERIFY(rootDir.mkpath(QStringLiteral("media-dev-tutorial")));
+
+  QFile validFile(rootDir.filePath(QStringLiteral("media-dev-tutorial/valid.md")));
+  QVERIFY(validFile.open(QIODevice::WriteOnly));
+  validFile.write("# Valid\n");
+  validFile.close();
+
+  QFile escapedFile(rootDir.filePath(QStringLiteral("acoustic-basics.md")));
+  QVERIFY(escapedFile.open(QIODevice::WriteOnly));
+  escapedFile.write("# Should Not Export\n");
+  escapedFile.close();
+
+  const QString rootConfigPath = rootDir.filePath(QStringLiteral("vx_notebook/contents/vx.json"));
+  QFile rootConfigFile(rootConfigPath);
+  QVERIFY(rootConfigFile.open(QIODevice::ReadOnly));
+  auto rootConfigDoc = QJsonDocument::fromJson(rootConfigFile.readAll());
+  rootConfigFile.close();
+  QVERIFY(rootConfigDoc.isObject());
+  QJsonObject rootConfig = rootConfigDoc.object();
+  rootConfig[QStringLiteral("folders")] = QJsonArray{QStringLiteral("media-dev-tutorial")};
+  QVERIFY(rootConfigFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+  rootConfigFile.write(QJsonDocument(rootConfig).toJson(QJsonDocument::Compact));
+  rootConfigFile.close();
+
+  QVERIFY(rootDir.mkpath(QStringLiteral("vx_notebook/contents/media-dev-tutorial")));
+  QJsonArray files;
+  files.append(QJsonObject{{QStringLiteral("id"), QStringLiteral("valid-id")},
+                           {QStringLiteral("name"), QStringLiteral("valid.md")},
+                           {QStringLiteral("createdUtc"), 1},
+                           {QStringLiteral("modifiedUtc"), 1},
+                           {QStringLiteral("metadata"), QJsonObject{}},
+                           {QStringLiteral("tags"), QJsonArray{}}});
+  files.append(QJsonObject{{QStringLiteral("id"), QStringLiteral("missing-id")},
+                           {QStringLiteral("name"), QStringLiteral("missing.md")},
+                           {QStringLiteral("createdUtc"), 1},
+                           {QStringLiteral("modifiedUtc"), 1},
+                           {QStringLiteral("metadata"), QJsonObject{}},
+                           {QStringLiteral("tags"), QJsonArray{}}});
+  files.append(QJsonObject{{QStringLiteral("id"), QStringLiteral("escaped-id")},
+                           {QStringLiteral("name"), QStringLiteral("../acoustic-basics.md")},
+                           {QStringLiteral("createdUtc"), 1},
+                           {QStringLiteral("modifiedUtc"), 1},
+                           {QStringLiteral("metadata"), QJsonObject{}},
+                           {QStringLiteral("tags"), QJsonArray{}}});
+
+  QJsonObject folderConfig;
+  folderConfig[QStringLiteral("id")] = QStringLiteral("media-folder-id");
+  folderConfig[QStringLiteral("name")] = QStringLiteral("media-dev-tutorial");
+  folderConfig[QStringLiteral("createdUtc")] = 1;
+  folderConfig[QStringLiteral("modifiedUtc")] = 1;
+  folderConfig[QStringLiteral("metadata")] = QJsonObject{};
+  folderConfig[QStringLiteral("files")] = files;
+  folderConfig[QStringLiteral("folders")] = QJsonArray{};
+
+  QFile folderConfigFile(
+      rootDir.filePath(QStringLiteral("vx_notebook/contents/media-dev-tutorial/vx.json")));
+  QVERIFY(folderConfigFile.open(QIODevice::WriteOnly));
+  folderConfigFile.write(QJsonDocument(folderConfig).toJson(QJsonDocument::Compact));
+  folderConfigFile.close();
+
+  char *reopenedNotebookId = nullptr;
+  err = vxcore_notebook_open(m_ctx, notebookPath.constData(), &reopenedNotebookId);
+  QVERIFY2(err == VXCORE_OK, "Failed to reopen stale test notebook");
+  QVERIFY(reopenedNotebookId != nullptr);
+  notebookIdStr = QString::fromUtf8(reopenedNotebookId);
+  vxcore_string_free(reopenedNotebookId);
+
+  ControllerFixture fixture(m_ctx);
+
+  TempDirFixture outputDir;
+  QVERIFY(outputDir.isValid());
+
+  vnotex::ExportContext context;
+  context.currentFolderId =
+      vnotex::NodeIdentifier{notebookIdStr, QStringLiteral("media-dev-tutorial")};
+  context.presetSource = vnotex::ExportSource::CurrentFolder;
+
+  vnotex::ExportOption option;
+  option.m_source = vnotex::ExportSource::CurrentFolder;
+  option.m_targetFormat = vnotex::ExportFormat::PDF;
+  option.m_outputDir = outputDir.path();
+  option.m_recursive = true;
+  option.m_exportAttachments = false;
+  option.m_pdfOption.m_allInOne = true;
+
+  QSignalSpy finishedSpy(fixture.controller, &vnotex::ExportController::exportFinished);
+  fixture.controller->doExport(option, context);
+
+  QCOMPARE(finishedSpy.count(), 1);
+  const QStringList outputFiles = finishedSpy.takeFirst().at(0).toStringList();
+  QCOMPARE(outputFiles.size(), 1);
+  QVERIFY(outputFiles.first().contains(
+      QStringLiteral("media-dev-tutorial/valid.md|headingLevelOffset=1")));
+
+  QVERIFY(vxcore_notebook_close(m_ctx, notebookIdStr.toUtf8().constData()) == VXCORE_OK);
 }
 
 void TestExportController::testEmptyContextHandling() {

@@ -1,7 +1,10 @@
 #include "exporter.h"
 
+#include <algorithm>
+
 #include <QDir>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QTemporaryDir>
 #include <QWidget>
 
@@ -12,6 +15,8 @@
 #include <utils/fileutils.h>
 #include <utils/pathutils.h>
 #include <utils/processutils.h>
+
+#include <vtextedit/markdownutils.h>
 
 using namespace vnotex;
 
@@ -26,6 +31,150 @@ static QString makeOutputFolder(const QString &p_outputDir, const QString &p_fol
   }
 
   return outputFolder;
+}
+
+QString convertLocalMarkdownImagesToAbsoluteUrls(QString p_content, const QString &p_basePath) {
+  auto images = vte::MarkdownUtils::fetchImagesFromMarkdownText(
+      p_content, p_basePath, vte::MarkdownLink::TypeFlag::LocalRelativeInternal);
+
+  std::sort(images.begin(), images.end(), [](const vte::MarkdownLink &p_lhs,
+                                             const vte::MarkdownLink &p_rhs) {
+    return p_lhs.m_urlInLinkPos > p_rhs.m_urlInLinkPos;
+  });
+
+  for (const auto &link : images) {
+    if (!QFileInfo::exists(link.m_path)) {
+      continue;
+    }
+
+    p_content.replace(link.m_urlInLinkPos, link.m_urlInLink.size(),
+                      PathUtils::pathToUrl(link.m_path).toString());
+  }
+
+  return p_content;
+}
+
+QString pageBreakMarkdown() {
+  return QStringLiteral("\n\n<div style=\"page-break-after: always;\"></div>\n\n");
+}
+
+QString sectionHeadingMarkdown(const ExportFileInfo &p_file) {
+  auto title = p_file.sectionTitle.trimmed();
+  title.replace(QRegularExpression(QStringLiteral("[\\r\\n]+")), QStringLiteral(" "));
+  return QStringLiteral("%1 %2\n")
+      .arg(QString(qBound(1, p_file.sectionLevel, 6), QLatin1Char('#')), title);
+}
+
+bool isFenceLine(const QString &p_line, QChar &p_marker, int &p_markerCount) {
+  int idx = 0;
+  while (idx < p_line.size() && idx < 3 && p_line[idx] == QLatin1Char(' ')) {
+    ++idx;
+  }
+
+  if (idx >= p_line.size()) {
+    return false;
+  }
+
+  const auto marker = p_line[idx];
+  if (marker != QLatin1Char('`') && marker != QLatin1Char('~')) {
+    return false;
+  }
+
+  int markerCount = 0;
+  while (idx + markerCount < p_line.size() && p_line[idx + markerCount] == marker) {
+    ++markerCount;
+  }
+
+  if (markerCount < 3) {
+    return false;
+  }
+
+  p_marker = marker;
+  p_markerCount = markerCount;
+  return true;
+}
+
+QString shiftMarkdownHeadingLine(const QString &p_line, int p_offset) {
+  int lineSize = p_line.size();
+  if (lineSize > 0 && p_line[lineSize - 1] == QLatin1Char('\r')) {
+    --lineSize;
+  }
+
+  int idx = 0;
+  while (idx < lineSize && idx < 3 && p_line[idx] == QLatin1Char(' ')) {
+    ++idx;
+  }
+
+  int headingStart = idx;
+  while (idx < lineSize && p_line[idx] == QLatin1Char('#')) {
+    ++idx;
+  }
+
+  const int headingLevel = idx - headingStart;
+  if (headingLevel < 1 || headingLevel > 6) {
+    return p_line;
+  }
+
+  if (idx < lineSize && p_line[idx] != QLatin1Char(' ') && p_line[idx] != QLatin1Char('\t')) {
+    return p_line;
+  }
+
+  const int shiftedLevel = qBound(1, headingLevel + p_offset, 6);
+  return p_line.left(headingStart) + QString(shiftedLevel, QLatin1Char('#')) + p_line.mid(idx);
+}
+
+QString shiftMarkdownHeadingLevels(const QString &p_content, int p_offset) {
+  if (p_offset <= 0 || p_content.isEmpty()) {
+    return p_content;
+  }
+
+  QString shifted;
+  shifted.reserve(p_content.size());
+
+  bool inFence = false;
+  QChar fenceMarker;
+  int fenceMarkerCount = 0;
+  int pos = 0;
+  while (pos < p_content.size()) {
+    const int newlineIdx = p_content.indexOf(QLatin1Char('\n'), pos);
+    const int lineEnd = newlineIdx < 0 ? p_content.size() : newlineIdx;
+    const auto line = p_content.mid(pos, lineEnd - pos);
+
+    QChar marker;
+    int markerCount = 0;
+    const bool fenceLine = isFenceLine(line, marker, markerCount);
+    if (fenceLine) {
+      if (!inFence) {
+        inFence = true;
+        fenceMarker = marker;
+        fenceMarkerCount = markerCount;
+      } else if (marker == fenceMarker && markerCount >= fenceMarkerCount) {
+        inFence = false;
+      }
+      shifted += line;
+    } else if (inFence) {
+      shifted += line;
+    } else {
+      shifted += shiftMarkdownHeadingLine(line, p_offset);
+    }
+
+    if (newlineIdx < 0) {
+      break;
+    }
+
+    shifted += QLatin1Char('\n');
+    pos = newlineIdx + 1;
+  }
+
+  return shifted;
+}
+
+void appendAllInOneSeparator(QString &p_content, bool p_previousWasHeading) {
+  if (p_content.isEmpty()) {
+    return;
+  }
+
+  p_content += p_previousWasHeading ? QStringLiteral("\n\n") : pageBreakMarkdown();
 }
 
 QString Exporter::doExportFile(const ExportOption &p_option, const QString &p_content,
@@ -63,8 +212,7 @@ QStringList Exporter::doExportBatch(const ExportOption &p_option,
     return outputFiles;
   }
 
-  if (p_option.m_targetFormat == ExportFormat::PDF && p_option.m_pdfOption.m_useWkhtmltopdf &&
-      p_option.m_pdfOption.m_allInOne) {
+  if (p_option.m_targetFormat == ExportFormat::PDF && p_option.m_pdfOption.m_allInOne) {
     auto file = doExportPdfAllInOne(p_option, p_files, p_batchName);
     if (!file.isEmpty()) {
       outputFiles << file;
@@ -86,6 +234,11 @@ QStringList Exporter::doExportBatch(const ExportOption &p_option,
     for (int i = 0; i < p_files.size(); ++i) {
       if (checkAskedToStop()) {
         break;
+      }
+
+      if (p_files[i].isSectionHeading) {
+        emit progressUpdated(i + 1, p_files.size());
+        continue;
       }
 
       const auto outputFile = doExport(p_option, outputFolder, p_files[i]);
@@ -222,6 +375,61 @@ QString Exporter::doExportPdfAllInOne(const ExportOption &p_option,
     return QString();
   }
 
+  auto fileName =
+      FileUtils::generateFileNameWithSequence(outputFolder, tr("all_in_one_export"), "pdf");
+  auto destFilePath = PathUtils::concatenateFilePath(outputFolder, fileName);
+
+  if (!p_option.m_pdfOption.m_useWkhtmltopdf) {
+    QString combinedContent;
+    bool previousWasHeading = false;
+    emit progressUpdated(0, p_files.size());
+    for (int i = 0; i < p_files.size(); ++i) {
+      if (checkAskedToStop()) {
+        return QString();
+      }
+
+      if (p_files[i].isSectionHeading) {
+        appendAllInOneSeparator(combinedContent, previousWasHeading);
+        combinedContent += sectionHeadingMarkdown(p_files[i]);
+        previousWasHeading = true;
+        emit progressUpdated(i + 1, p_files.size());
+        continue;
+      }
+
+      try {
+        auto content = FileUtils::readTextFile(p_files[i].filePath);
+        if (p_files[i].isMarkdown) {
+          content = shiftMarkdownHeadingLevels(content, p_files[i].headingLevelOffset);
+          content = convertLocalMarkdownImagesToAbsoluteUrls(content, p_files[i].resourcePath);
+        }
+
+        appendAllInOneSeparator(combinedContent, previousWasHeading);
+        combinedContent += content;
+        previousWasHeading = false;
+      } catch (const Exception &e) {
+        emit logRequested(tr("Failed to read file (%1): %2")
+                              .arg(p_files[i].filePath, QString::fromUtf8(e.what())));
+      }
+
+      emit progressUpdated(i + 1, p_files.size());
+    }
+
+    if (combinedContent.isEmpty() || checkAskedToStop()) {
+      return QString();
+    }
+
+    emit logRequested(tr("Rendering combined PDF..."));
+    emit progressUpdated(0, 0);
+    const auto outputFile = doExportPdf(p_option, outputFolder, combinedContent, QString(),
+                                        QStringLiteral("all_in_one_export.md"), outputFolder,
+                                        destFilePath,
+                                        QString());
+    if (!outputFile.isEmpty()) {
+      emit logRequested(tr("Exported to (%1).").arg(outputFile));
+    }
+    return outputFile;
+  }
+
   QTemporaryDir tmpDir;
   if (!tmpDir.isValid()) {
     emit logRequested(tr("Failed to create temporary directory to hold HTML files."));
@@ -237,9 +445,27 @@ QString Exporter::doExportPdfAllInOne(const ExportOption &p_option,
       return QString();
     }
 
-    const auto htmlFile =
-        doExportHtml(tmpOption, tmpDir.path(), QString(), p_files[i].filePath, p_files[i].fileName,
-                     p_files[i].resourcePath, QString(), QString());
+    QString htmlFile;
+    if (p_files[i].isSectionHeading) {
+      htmlFile = doExportHtml(tmpOption, tmpDir.path(), sectionHeadingMarkdown(p_files[i]),
+                              QString(), QStringLiteral("section_heading.md"), tmpDir.path(),
+                              QString(), QString());
+    } else if (p_files[i].isMarkdown) {
+      try {
+        auto content = FileUtils::readTextFile(p_files[i].filePath);
+        content = shiftMarkdownHeadingLevels(content, p_files[i].headingLevelOffset);
+        htmlFile = doExportHtml(tmpOption, tmpDir.path(), content, p_files[i].filePath,
+                                p_files[i].fileName, p_files[i].resourcePath, QString(),
+                                QString());
+      } catch (const Exception &e) {
+        emit logRequested(tr("Failed to read file (%1): %2")
+                              .arg(p_files[i].filePath, QString::fromUtf8(e.what())));
+      }
+    } else {
+      htmlFile = doExportHtml(tmpOption, tmpDir.path(), QString(), p_files[i].filePath,
+                              p_files[i].fileName, p_files[i].resourcePath, QString(),
+                              QString());
+    }
     if (!htmlFile.isEmpty()) {
       htmlFiles << htmlFile;
     }
@@ -256,9 +482,8 @@ QString Exporter::doExportPdfAllInOne(const ExportOption &p_option,
     return QString();
   }
 
-  auto fileName =
-      FileUtils::generateFileNameWithSequence(outputFolder, tr("all_in_one_export"), "pdf");
-  auto destFilePath = PathUtils::concatenateFilePath(outputFolder, fileName);
+  emit logRequested(tr("Rendering combined PDF..."));
+  emit progressUpdated(0, 0);
   if (getWebViewExporter(p_option)->htmlToPdfViaWkhtmltopdf(p_option.m_pdfOption, htmlFiles,
                                                             destFilePath)) {
     emit logRequested(tr("Exported to (%1).").arg(destFilePath));
@@ -295,9 +520,27 @@ QString Exporter::doExportCustomAllInOne(const ExportOption &p_option,
         return QString();
       }
 
-      const auto htmlFile =
-          doExportHtml(tmpOption, tmpDir.path(), QString(), p_files[i].filePath,
-                       p_files[i].fileName, p_files[i].resourcePath, QString(), QString());
+      QString htmlFile;
+      if (p_files[i].isSectionHeading) {
+        htmlFile = doExportHtml(tmpOption, tmpDir.path(), sectionHeadingMarkdown(p_files[i]),
+                                QString(), QStringLiteral("section_heading.md"), tmpDir.path(),
+                                QString(), QString());
+      } else if (p_files[i].isMarkdown) {
+        try {
+          auto content = FileUtils::readTextFile(p_files[i].filePath);
+          content = shiftMarkdownHeadingLevels(content, p_files[i].headingLevelOffset);
+          htmlFile = doExportHtml(tmpOption, tmpDir.path(), content, p_files[i].filePath,
+                                  p_files[i].fileName, p_files[i].resourcePath, QString(),
+                                  QString());
+        } catch (const Exception &e) {
+          emit logRequested(tr("Failed to read file (%1): %2")
+                                .arg(p_files[i].filePath, QString::fromUtf8(e.what())));
+        }
+      } else {
+        htmlFile = doExportHtml(tmpOption, tmpDir.path(), QString(), p_files[i].filePath,
+                                p_files[i].fileName, p_files[i].resourcePath, QString(),
+                                QString());
+      }
       if (!htmlFile.isEmpty()) {
         inputFiles << htmlFile;
         resourcePaths << PathUtils::parentDirPath(htmlFile);
@@ -319,6 +562,11 @@ QString Exporter::doExportCustomAllInOne(const ExportOption &p_option,
     for (int i = 0; i < p_files.size(); ++i) {
       if (checkAskedToStop()) {
         return QString();
+      }
+
+      if (p_files[i].isSectionHeading) {
+        emit progressUpdated(i + 1, p_files.size());
+        continue;
       }
 
       inputFiles << p_files[i].filePath;

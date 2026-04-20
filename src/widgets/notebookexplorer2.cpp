@@ -531,6 +531,10 @@ void NotebookExplorer2::locateNode(const NodeIdentifier &p_nodeId) {
   setCurrentNode(p_nodeId);
 }
 
+QList<NodeIdentifier> NotebookExplorer2::selectedNodeIds() const {
+  return m_nodeExplorer ? m_nodeExplorer->selectedNodeIds() : QList<NodeIdentifier>();
+}
+
 NodeIdentifier NotebookExplorer2::currentNodeId() const {
   return m_nodeExplorer ? m_nodeExplorer->currentNodeId() : NodeIdentifier();
 }
@@ -987,11 +991,8 @@ void NotebookExplorer2::onImportFilesRequested(const NodeIdentifier &p_targetFol
   // Use NotebookService to perform the import, then reload
   auto &notebookService = *m_services.get<NotebookCoreService>();
   for (const QString &filePath : files) {
-    QFileInfo fileInfo(filePath);
-    QString destPath = p_targetFolderId.relativePath.isEmpty()
-                           ? fileInfo.fileName()
-                           : p_targetFolderId.relativePath + "/" + fileInfo.fileName();
-    notebookService.importFile(p_targetFolderId.notebookId, filePath, destPath);
+    notebookService.importFile(p_targetFolderId.notebookId, p_targetFolderId.relativePath,
+                               filePath);
   }
   // Reload the folder to show imported files
   m_nodeExplorer->reloadNode(p_targetFolderId);

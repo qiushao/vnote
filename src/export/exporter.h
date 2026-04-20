@@ -12,11 +12,15 @@ namespace vnotex {
 class WebViewExporter;
 
 struct ExportFileInfo {
+  bool isSectionHeading = false;
+  QString sectionTitle;
+  int sectionLevel = 1;
   QString filePath;
   QString fileName;
   QString resourcePath;
   QString attachmentFolderPath;
   bool isMarkdown = true;
+  int headingLevelOffset = 0;
 };
 
 class Exporter : public QObject {

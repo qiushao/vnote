@@ -1,15 +1,22 @@
 #include "exportdialog2.h"
 
+#include <algorithm>
+
 #include <QCheckBox>
+#include <QCollator>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDesktopServices>
 #include <QDialogButtonBox>
+#include <QDir>
+#include <QFileInfo>
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QInputDialog>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPageLayout>
@@ -18,6 +25,7 @@
 #include <QPrinter>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QSet>
 #include <QStackedLayout>
 #include <QStandardItemModel>
 #include <QTextCursor>
@@ -28,6 +36,7 @@
 #include <core/configmgr2.h>
 #include <core/servicelocator.h>
 #include <core/sessionconfig.h>
+#include <core/services/notebookcoreservice.h>
 #include <gui/services/themeservice.h>
 
 #include "../locationinputwithbrowsebutton.h"
@@ -89,6 +98,13 @@ private:
 using namespace vnotex;
 
 namespace {
+constexpr int c_sourceNotebookIdRole = Qt::UserRole + 1;
+constexpr int c_sourceRelativePathRole = Qt::UserRole + 2;
+
+QString displayFolderPath(const QString &p_relativePath) {
+  return p_relativePath.isEmpty() ? QStringLiteral("/") : p_relativePath;
+}
+
 QString sourceText(ExportSource p_source, const ExportContext &p_context) {
   switch (p_source) {
   case ExportSource::CurrentBuffer:
@@ -105,7 +121,8 @@ QString sourceText(ExportSource p_source, const ExportContext &p_context) {
 
   case ExportSource::CurrentFolder:
     if (p_context.currentFolderId.isValid()) {
-      return ExportDialog2::tr("Current Folder (%1)").arg(p_context.currentFolderId.relativePath);
+      return ExportDialog2::tr("Current Folder (%1)")
+          .arg(displayFolderPath(p_context.currentFolderId.relativePath));
     }
     return ExportDialog2::tr("Current Folder");
 
@@ -114,6 +131,9 @@ QString sourceText(ExportSource p_source, const ExportContext &p_context) {
       return ExportDialog2::tr("Current Notebook (%1)").arg(p_context.notebookId);
     }
     return ExportDialog2::tr("Current Notebook");
+
+  case ExportSource::SelectedNodes:
+    return ExportDialog2::tr("Selected Nodes (%1)").arg(p_context.selectedNodeIds.size());
   }
 
   return ExportDialog2::tr("Unknown Source");
@@ -122,7 +142,8 @@ QString sourceText(ExportSource p_source, const ExportContext &p_context) {
 bool sourceAvailable(ExportSource p_source, const ExportContext &p_context) {
   switch (p_source) {
   case ExportSource::CurrentBuffer:
-    return !p_context.bufferContent.isEmpty();
+    return !p_context.bufferContent.isEmpty() || !p_context.bufferPath.isEmpty() ||
+           p_context.currentNodeId.isValid();
 
   case ExportSource::CurrentNote:
     return p_context.currentNodeId.isValid() && !p_context.currentNodeId.relativePath.isEmpty();
@@ -132,6 +153,9 @@ bool sourceAvailable(ExportSource p_source, const ExportContext &p_context) {
 
   case ExportSource::CurrentNotebook:
     return !p_context.notebookId.isEmpty();
+
+  case ExportSource::SelectedNodes:
+    return !p_context.selectedNodeIds.isEmpty();
   }
 
   return false;
@@ -150,6 +174,9 @@ QString sourceUnavailableReason(ExportSource p_source) {
 
   case ExportSource::CurrentNotebook:
     return ExportDialog2::tr("No current notebook available");
+
+  case ExportSource::SelectedNodes:
+    return ExportDialog2::tr("No selected nodes available");
   }
 
   return QString();
@@ -167,6 +194,97 @@ int findCustomOption(const QVector<ExportCustomOption> &p_options, const QString
   }
 
   return -1;
+}
+
+QCollator newFolderCollator() {
+  QCollator collator;
+  collator.setNumericMode(true);
+  collator.setCaseSensitivity(Qt::CaseInsensitive);
+  return collator;
+}
+
+bool isDirectChildName(const QString &p_name) {
+  const auto name = QDir::fromNativeSeparators(p_name);
+  return !name.isEmpty() && name != QStringLiteral(".") && name != QStringLiteral("..") &&
+         !name.contains(QLatin1Char('/'));
+}
+
+void appendFolderNames(const QJsonObject &p_children, QStringList &p_names, QSet<QString> &p_seen) {
+  const auto folders = p_children.value(QStringLiteral("folders")).toArray();
+  for (const auto &folder : folders) {
+    const auto name = folder.toObject().value(QStringLiteral("name")).toString();
+    if (isDirectChildName(name) && !p_seen.contains(name)) {
+      p_names.append(name);
+      p_seen.insert(name);
+    }
+  }
+}
+
+bool shouldSkipFileSystemFolder(const QFileInfo &p_info, const QString &p_assetsFolder) {
+  const auto name = p_info.fileName();
+  if (!p_info.isDir() || name.isEmpty() || name.startsWith(QLatin1Char('.')) ||
+      name == QStringLiteral("vx_notebook") || name == QStringLiteral("vx.json") ||
+      name.endsWith(QStringLiteral(".vswp"))) {
+    return true;
+  }
+
+  return !p_assetsFolder.isEmpty() && !p_assetsFolder.contains(QLatin1Char('/')) &&
+         name == p_assetsFolder;
+}
+
+void appendFileSystemFolderNames(const QString &p_folderPath, const QString &p_assetsFolder,
+                                 QStringList &p_names, QSet<QString> &p_seen) {
+  QDir dir(p_folderPath);
+  if (!dir.exists()) {
+    return;
+  }
+
+  const auto infos =
+      dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks, QDir::NoSort);
+  for (const auto &info : infos) {
+    const auto name = info.fileName();
+    if (!shouldSkipFileSystemFolder(info, p_assetsFolder) && !p_seen.contains(name)) {
+      p_names.append(name);
+      p_seen.insert(name);
+    }
+  }
+}
+
+QStringList sortedFolderNames(const QJsonObject &p_children, const QJsonObject &p_externalChildren,
+                              const QString &p_folderPath, const QString &p_assetsFolder) {
+  QStringList names;
+  QSet<QString> seen;
+  appendFolderNames(p_children, names, seen);
+  appendFolderNames(p_externalChildren, names, seen);
+  appendFileSystemFolderNames(p_folderPath, p_assetsFolder, names, seen);
+
+  auto collator = newFolderCollator();
+  std::sort(names.begin(), names.end(), [&collator](const QString &p_lhs,
+                                                    const QString &p_rhs) {
+    return collator.compare(p_lhs, p_rhs) < 0;
+  });
+  return names;
+}
+
+void collectFolderIds(NotebookCoreService *p_notebookService, const QString &p_notebookId,
+                      const QString &p_folderPath, QList<NodeIdentifier> &p_folders) {
+  if (!p_notebookService || p_notebookId.isEmpty()) {
+    return;
+  }
+
+  const auto children = p_notebookService->listFolderChildren(p_notebookId, p_folderPath);
+  const auto externalChildren = p_notebookService->listFolderExternal(p_notebookId, p_folderPath);
+  const auto absoluteFolderPath = p_notebookService->buildAbsolutePath(p_notebookId, p_folderPath);
+  const auto config = p_notebookService->getNotebookConfig(p_notebookId);
+  const auto assetsFolder =
+      config.value(QStringLiteral("assetsFolder")).toString(QStringLiteral("vx_assets"));
+  for (const auto &name :
+       sortedFolderNames(children, externalChildren, absoluteFolderPath, assetsFolder)) {
+    const auto childPath =
+        p_folderPath.isEmpty() ? name : p_folderPath + QLatin1Char('/') + name;
+    p_folders.append(NodeIdentifier{p_notebookId, childPath});
+    collectFolderIds(p_notebookService, p_notebookId, childPath, p_folders);
+  }
 }
 } // namespace
 
@@ -206,10 +324,16 @@ void ExportDialog2::setupUI() {
   // Row 0: Source + Format.
   m_sourceCombo = WidgetsFactory::createComboBox(optionsGroupBox);
   for (int i = static_cast<int>(ExportSource::CurrentBuffer);
-       i <= static_cast<int>(ExportSource::CurrentNotebook); ++i) {
+       i <= static_cast<int>(ExportSource::SelectedNodes); ++i) {
     auto source = static_cast<ExportSource>(i);
     m_sourceCombo->addItem(sourceText(source, m_context), i);
     const int idx = m_sourceCombo->count() - 1;
+    if (source == ExportSource::CurrentFolder && m_context.currentFolderId.isValid()) {
+      m_sourceCombo->setItemData(idx, m_context.currentFolderId.notebookId,
+                                 c_sourceNotebookIdRole);
+      m_sourceCombo->setItemData(idx, m_context.currentFolderId.relativePath,
+                                 c_sourceRelativePathRole);
+    }
 
     if (!sourceAvailable(source, m_context)) {
       // Disable the item via QStandardItem flags (the proper Qt API).
@@ -220,6 +344,29 @@ void ExportDialog2::setupUI() {
         }
       }
       m_sourceCombo->setItemData(idx, sourceUnavailableReason(source), Qt::ToolTipRole);
+    }
+  }
+
+  const auto notebookId = !m_context.notebookId.isEmpty()
+                              ? m_context.notebookId
+                              : (m_context.currentNodeId.isValid() ? m_context.currentNodeId.notebookId
+                                                                   : m_context.currentFolderId.notebookId);
+  auto *notebookService = m_services.get<NotebookCoreService>();
+  if (notebookService && !notebookId.isEmpty()) {
+    QList<NodeIdentifier> folders;
+    folders.append(NodeIdentifier{notebookId, QString()});
+    collectFolderIds(notebookService, notebookId, QString(), folders);
+
+    for (const auto &folderId : folders) {
+      if (folderId == m_context.currentFolderId) {
+        continue;
+      }
+
+      m_sourceCombo->addItem(tr("Folder (%1)").arg(displayFolderPath(folderId.relativePath)),
+                             static_cast<int>(ExportSource::CurrentFolder));
+      const int idx = m_sourceCombo->count() - 1;
+      m_sourceCombo->setItemData(idx, folderId.notebookId, c_sourceNotebookIdRole);
+      m_sourceCombo->setItemData(idx, folderId.relativePath, c_sourceRelativePathRole);
     }
   }
 
@@ -242,12 +389,16 @@ void ExportDialog2::setupUI() {
   commonLayout->addWidget(m_outputDirInput, 1, 1, 1, 3);
 
   // Row 2: Rendering style + Syntax style.
-  const auto webStyles = m_services.get<ThemeService>()->getWebStyles();
+  auto *themeService = m_services.get<ThemeService>();
+  const auto webStyles = themeService->getWebStyles();
+  const auto highlightStyles = themeService->getHighlightStyles();
 
   m_renderingStyleCombo = WidgetsFactory::createComboBox(optionsGroupBox);
   m_syntaxStyleCombo = WidgetsFactory::createComboBox(optionsGroupBox);
   for (const auto &style : webStyles) {
     m_renderingStyleCombo->addItem(style.first, style.second);
+  }
+  for (const auto &style : highlightStyles) {
     m_syntaxStyleCombo->addItem(style.first, style.second);
   }
 
@@ -360,8 +511,12 @@ void ExportDialog2::setupUI() {
       updatePageLayoutButtonLabel();
     });
 
-    m_addTableOfContentsCheck = WidgetsFactory::createCheckBox(tr("Add table of contents"), page);
+    m_addTableOfContentsCheck =
+        WidgetsFactory::createCheckBox(tr("Add visible table of contents"), page);
     layout->addRow(m_addTableOfContentsCheck);
+
+    m_addPdfOutlineCheck = WidgetsFactory::createCheckBox(tr("Add PDF outline"), page);
+    layout->addRow(m_addPdfOutlineCheck);
 
     m_useWkhtmltopdfCheck =
         WidgetsFactory::createCheckBox(tr("Use wkhtmltopdf (outline supported)"), page);
@@ -512,15 +667,11 @@ void ExportDialog2::restoreFields(const ExportOption &p_option) {
   m_recursiveCheck->setChecked(p_option.m_recursive);
   m_exportAttachmentsCheck->setChecked(p_option.m_exportAttachments);
 
-  idx = m_renderingStyleCombo->findData(p_option.m_renderingStyleFile);
-  if (idx >= 0) {
-    m_renderingStyleCombo->setCurrentIndex(idx);
-  }
-
-  idx = m_syntaxStyleCombo->findData(p_option.m_syntaxHighlightStyleFile);
-  if (idx >= 0) {
-    m_syntaxStyleCombo->setCurrentIndex(idx);
-  }
+  auto *themeService = m_services.get<ThemeService>();
+  restoreStyleCombo(m_renderingStyleCombo, p_option.m_renderingStyleFile,
+                    themeService->getFile(Theme::File::WebStyleSheet));
+  restoreStyleCombo(m_syntaxStyleCombo, p_option.m_syntaxHighlightStyleFile,
+                    themeService->getFile(Theme::File::HighlightStyleSheet));
 
   restoreHtmlFields(p_option.m_htmlOption);
   restorePdfFields(p_option.m_pdfOption);
@@ -557,6 +708,33 @@ ExportOption ExportDialog2::collectFields() {
   return option;
 }
 
+void ExportDialog2::updateContextFromSelectedSource() {
+  const auto source = static_cast<ExportSource>(m_sourceCombo->currentData().toInt());
+  if (source != ExportSource::CurrentFolder) {
+    return;
+  }
+
+  const auto notebookId = m_sourceCombo->currentData(c_sourceNotebookIdRole).toString();
+  if (notebookId.isEmpty()) {
+    return;
+  }
+
+  m_context.currentFolderId =
+      NodeIdentifier{notebookId, m_sourceCombo->currentData(c_sourceRelativePathRole).toString()};
+}
+
+void ExportDialog2::restoreStyleCombo(QComboBox *p_combo, const QString &p_savedStyleFile,
+                                      const QString &p_defaultStyleFile) {
+  int idx = p_combo->findData(p_defaultStyleFile);
+  if (idx < 0) {
+    idx = p_combo->findData(p_savedStyleFile);
+  }
+
+  if (idx >= 0) {
+    p_combo->setCurrentIndex(idx);
+  }
+}
+
 void ExportDialog2::restoreHtmlFields(const ExportHtmlOption &p_option) {
   m_embedStylesCheck->setChecked(p_option.m_embedStyles);
   m_embedImagesCheck->setChecked(p_option.m_embedImages);
@@ -580,6 +758,7 @@ void ExportDialog2::restorePdfFields(const ExportPdfOption &p_option) {
   updatePageLayoutButtonLabel();
 
   m_addTableOfContentsCheck->setChecked(p_option.m_addTableOfContents);
+  m_addPdfOutlineCheck->setChecked(p_option.m_addPdfOutline);
   m_useWkhtmltopdfCheck->setChecked(p_option.m_useWkhtmltopdf);
   m_wkhtmltopdfExePathEdit->setText(p_option.m_wkhtmltopdfExePath);
   m_wkhtmltopdfArgsEdit->setText(p_option.m_wkhtmltopdfArgs);
@@ -591,6 +770,7 @@ void ExportDialog2::restorePdfFields(const ExportPdfOption &p_option) {
 void ExportDialog2::savePdfFields(ExportPdfOption &p_option) const {
   p_option.m_layout = m_pageLayout;
   p_option.m_addTableOfContents = m_addTableOfContentsCheck->isChecked();
+  p_option.m_addPdfOutline = m_addPdfOutlineCheck->isChecked();
   p_option.m_useWkhtmltopdf = m_useWkhtmltopdfCheck->isChecked();
   p_option.m_wkhtmltopdfExePath = m_wkhtmltopdfExePathEdit->text();
   p_option.m_wkhtmltopdfArgs = m_wkhtmltopdfArgsEdit->text();
@@ -721,7 +901,9 @@ void ExportDialog2::onExportClicked() {
   saveCurrentCustomScheme();
 
   updateUiOnExportState(true);
-  m_controller->doExport(collectFields(), m_context);
+  auto option = collectFields();
+  updateContextFromSelectedSource();
+  m_controller->doExport(option, m_context);
 }
 
 void ExportDialog2::onExportFinished(const QStringList &p_outputFiles) {
@@ -749,7 +931,6 @@ void ExportDialog2::updatePdfWidgetsByWkhtmltopdf() {
   const bool enabled = m_useWkhtmltopdfCheck->isChecked();
   m_wkhtmltopdfExePathEdit->setEnabled(enabled);
   m_wkhtmltopdfArgsEdit->setEnabled(enabled);
-  m_pdfAllInOneCheck->setEnabled(enabled);
 }
 
 void ExportDialog2::updateUiOnExportState(bool p_exporting) {

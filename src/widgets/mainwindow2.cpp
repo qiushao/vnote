@@ -346,11 +346,13 @@ void MainWindow2::exportNotes() {
     context.bufferName = viewWin->getName();
     const auto &buffer = viewWin->getBuffer();
     context.currentNodeId = buffer.nodeId();
+    context.bufferPath = buffer.resolvedPath();
   }
 
   // Get notebook/folder context from NotebookExplorer2.
   context.notebookId = m_notebookExplorer->currentNotebookId();
   context.currentFolderId = m_notebookExplorer->currentExploredFolderId();
+  context.selectedNodeIds = m_notebookExplorer->selectedNodeIds();
 
   // If no explicit current node from ViewWindow2, use explorer's selected node.
   if (!context.currentNodeId.isValid()) {
@@ -359,6 +361,9 @@ void MainWindow2::exportNotes() {
 
   // Default source for toolbar is CurrentBuffer (if available).
   context.presetSource = viewWin ? ExportSource::CurrentBuffer : ExportSource::CurrentNote;
+  if (context.selectedNodeIds.size() > 1) {
+    context.presetSource = ExportSource::SelectedNodes;
+  }
 
   // Create non-modal ExportDialog2.
   m_exportDialog = new ExportDialog2(m_serviceLocator, context, this);
@@ -448,6 +453,10 @@ void MainWindow2::setupDocks() {
             ExportContext context;
             context.currentNodeId = p_nodeId;
             context.notebookId = p_nodeId.notebookId;
+            context.selectedNodeIds = m_notebookExplorer->selectedNodeIds();
+            if (!context.selectedNodeIds.contains(p_nodeId)) {
+              context.selectedNodeIds = QList<NodeIdentifier>() << p_nodeId;
+            }
 
             if (isFolder) {
               context.currentFolderId = p_nodeId;
@@ -460,6 +469,9 @@ void MainWindow2::setupDocks() {
               };
               context.presetSource = ExportSource::CurrentNote;
             }
+            if (context.selectedNodeIds.size() > 1) {
+              context.presetSource = ExportSource::SelectedNodes;
+            }
 
             auto *viewWin = m_viewArea->getCurrentViewWindow();
             if (viewWin) {
@@ -467,6 +479,7 @@ void MainWindow2::setupDocks() {
               if (buffer.nodeId() == p_nodeId) {
                 context.bufferContent = viewWin->getLatestContent();
                 context.bufferName = viewWin->getName();
+                context.bufferPath = buffer.resolvedPath();
               }
             }
 

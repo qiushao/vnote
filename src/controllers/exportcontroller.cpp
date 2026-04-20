@@ -1,8 +1,13 @@
 #include "exportcontroller.h"
 
+#include <algorithm>
+
+#include <QCollator>
+#include <QDir>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QSet>
 #include <QWidget>
 #include <exception>
 
@@ -14,6 +19,178 @@
 #include <utils/fileutils.h>
 
 using namespace vnotex;
+
+namespace {
+
+struct ExportChildEntry {
+  QString m_name;
+  bool m_folder = false;
+};
+
+bool isDirectChildName(const QString &p_name) {
+  const auto name = QDir::fromNativeSeparators(p_name);
+  return !name.isEmpty() && name != QStringLiteral(".") && name != QStringLiteral("..") &&
+         !name.contains(QLatin1Char('/'));
+}
+
+QCollator newExportCollator() {
+  QCollator collator;
+  collator.setNumericMode(true);
+  collator.setCaseSensitivity(Qt::CaseInsensitive);
+  return collator;
+}
+
+void appendChildEntries(const QJsonObject &p_children, QVector<ExportChildEntry> &p_entries,
+                        QSet<QString> &p_seen) {
+  const auto fileArray = p_children.value(QStringLiteral("files")).toArray();
+  for (const auto &fileValue : fileArray) {
+    const auto name = fileValue.toObject().value(QStringLiteral("name")).toString();
+    const auto key = QStringLiteral("f:") + name;
+    if (isDirectChildName(name) && !p_seen.contains(key)) {
+      p_entries.append(ExportChildEntry{name, false});
+      p_seen.insert(key);
+    }
+  }
+
+  const auto folderArray = p_children.value(QStringLiteral("folders")).toArray();
+  for (const auto &folderValue : folderArray) {
+    const auto name = folderValue.toObject().value(QStringLiteral("name")).toString();
+    const auto key = QStringLiteral("d:") + name;
+    if (isDirectChildName(name) && !p_seen.contains(key)) {
+      p_entries.append(ExportChildEntry{name, true});
+      p_seen.insert(key);
+    }
+  }
+}
+
+bool shouldSkipFileSystemEntry(const QFileInfo &p_info, const QString &p_assetsFolder) {
+  const auto name = p_info.fileName();
+  if (name.isEmpty() || name.startsWith(QLatin1Char('.')) || name == QStringLiteral("vx.json") ||
+      name == QStringLiteral("vx_notebook") || name.endsWith(QStringLiteral(".vswp"))) {
+    return true;
+  }
+
+  return !p_assetsFolder.isEmpty() && !p_assetsFolder.contains(QLatin1Char('/')) &&
+         name == p_assetsFolder;
+}
+
+void appendFileSystemChildEntries(const QString &p_folderPath, const QString &p_assetsFolder,
+                                  QVector<ExportChildEntry> &p_entries, QSet<QString> &p_seen) {
+  QDir dir(p_folderPath);
+  if (!dir.exists()) {
+    return;
+  }
+
+  const auto infos =
+      dir.entryInfoList(QDir::Dirs | QDir::Files | QDir::NoDotAndDotDot | QDir::NoSymLinks,
+                        QDir::NoSort);
+  for (const auto &info : infos) {
+    if (shouldSkipFileSystemEntry(info, p_assetsFolder)) {
+      continue;
+    }
+
+    const bool isFolder = info.isDir();
+    if (!isFolder && !info.isFile()) {
+      continue;
+    }
+
+    const auto key = (isFolder ? QStringLiteral("d:") : QStringLiteral("f:")) + info.fileName();
+    if (!p_seen.contains(key)) {
+      p_entries.append(ExportChildEntry{info.fileName(), isFolder});
+      p_seen.insert(key);
+    }
+  }
+}
+
+QVector<ExportChildEntry> sortedChildEntries(const QJsonObject &p_children,
+                                             const QJsonObject &p_externalChildren,
+                                             const QString &p_folderPath,
+                                             const QString &p_assetsFolder) {
+  QVector<ExportChildEntry> entries;
+  QSet<QString> seen;
+  appendChildEntries(p_children, entries, seen);
+  appendChildEntries(p_externalChildren, entries, seen);
+  appendFileSystemChildEntries(p_folderPath, p_assetsFolder, entries, seen);
+
+  auto collator = newExportCollator();
+  std::sort(entries.begin(), entries.end(), [&collator](const ExportChildEntry &p_lhs,
+                                                        const ExportChildEntry &p_rhs) {
+    const int result = collator.compare(p_lhs.m_name, p_rhs.m_name);
+    if (result != 0) {
+      return result < 0;
+    }
+
+    return p_lhs.m_folder && !p_rhs.m_folder;
+  });
+
+  return entries;
+}
+
+QList<NodeIdentifier> sortedNodeIds(QList<NodeIdentifier> p_nodeIds) {
+  auto collator = newExportCollator();
+  std::sort(p_nodeIds.begin(), p_nodeIds.end(), [&collator](const NodeIdentifier &p_lhs,
+                                                            const NodeIdentifier &p_rhs) {
+    const int pathResult = collator.compare(p_lhs.relativePath, p_rhs.relativePath);
+    if (pathResult != 0) {
+      return pathResult < 0;
+    }
+
+    return collator.compare(p_lhs.notebookId, p_rhs.notebookId) < 0;
+  });
+
+  return p_nodeIds;
+}
+
+void appendFolderHeading(const QString &p_title, int p_level, QVector<ExportFileInfo> &p_files) {
+  const auto title = p_title.trimmed();
+  if (title.isEmpty()) {
+    return;
+  }
+
+  ExportFileInfo info;
+  info.isSectionHeading = true;
+  info.sectionTitle = title;
+  info.sectionLevel = qBound(1, p_level, 6);
+  p_files.append(info);
+}
+
+QString normalizedAbsolutePath(const QString &p_path) {
+  if (p_path.isEmpty()) {
+    return QString();
+  }
+
+  const QFileInfo info(p_path);
+  const auto path = info.exists() ? info.canonicalFilePath() : info.absoluteFilePath();
+  return QDir::cleanPath(path);
+}
+
+bool isSamePath(const QString &p_lhs, const QString &p_rhs) {
+  const auto lhs = normalizedAbsolutePath(p_lhs);
+  const auto rhs = normalizedAbsolutePath(p_rhs);
+  return !lhs.isEmpty() && lhs == rhs;
+}
+
+bool isPathUnderDirectory(const QString &p_path, const QString &p_dir) {
+  const auto path = normalizedAbsolutePath(p_path);
+  const auto dir = normalizedAbsolutePath(p_dir);
+  if (path.isEmpty() || dir.isEmpty()) {
+    return false;
+  }
+
+  return path == dir || path.startsWith(dir + QLatin1Char('/'));
+}
+
+QString excludedOutputDirForSource(const QString &p_outputDir, const QString &p_sourceRootDir) {
+  if (p_outputDir.isEmpty() || p_sourceRootDir.isEmpty() ||
+      isSamePath(p_outputDir, p_sourceRootDir) ||
+      !isPathUnderDirectory(p_outputDir, p_sourceRootDir)) {
+    return QString();
+  }
+
+  return normalizedAbsolutePath(p_outputDir);
+}
+
+} // namespace
 
 ExportController::ExportController(ServiceLocator &p_services, QObject *p_parent)
     : ExportController(p_services, nullptr, p_parent) {}
@@ -45,17 +222,33 @@ void ExportController::doExport(const ExportOption &p_option, const ExportContex
       break;
     }
 
+    const bool includeFolderHeadings =
+        p_option.m_targetFormat == ExportFormat::PDF && p_option.m_pdfOption.m_allInOne;
+
     try {
       switch (p_option.m_source) {
       case ExportSource::CurrentBuffer: {
-        if (!p_context.currentNodeId.isValid()) {
+        if (!p_context.currentNodeId.isValid() && p_context.bufferPath.isEmpty()) {
           emit logRequested(tr("No current buffer available for export."));
           break;
         }
 
-        const auto relativePath = normalizedRelativePath(p_context.currentNodeId.relativePath);
-        const auto filePath =
-            notebookService->buildAbsolutePath(p_context.currentNodeId.notebookId, relativePath);
+        QString relativePath;
+        QString filePath;
+        QString attachmentFolderPath;
+        if (p_context.currentNodeId.isValid()) {
+          relativePath = normalizedRelativePath(p_context.currentNodeId.relativePath);
+          filePath =
+              notebookService->buildAbsolutePath(p_context.currentNodeId.notebookId, relativePath);
+          attachmentFolderPath =
+              p_option.m_exportAttachments
+                  ? notebookService->getAttachmentsFolder(p_context.currentNodeId.notebookId,
+                                                          relativePath)
+                  : QString();
+        } else {
+          filePath = p_context.bufferPath;
+        }
+
         if (filePath.isEmpty()) {
           emit logRequested(tr("Failed to resolve current buffer path."));
           break;
@@ -68,10 +261,7 @@ void ExportController::doExport(const ExportOption &p_option, const ExportContex
 
         const auto outputFile = exporter->doExportFile(
             p_option, p_context.bufferContent, filePath, fileName,
-            QFileInfo(filePath).absolutePath(),
-            p_option.m_exportAttachments ? notebookService->getAttachmentsFolder(
-                                               p_context.currentNodeId.notebookId, relativePath)
-                                         : QString(),
+            QFileInfo(filePath).absolutePath(), attachmentFolderPath,
             isMarkdownFile(filePath));
         if (!outputFile.isEmpty()) {
           outputFiles.append(outputFile);
@@ -113,11 +303,74 @@ void ExportController::doExport(const ExportOption &p_option, const ExportContex
         }
 
         const auto relativePath = normalizedRelativePath(p_context.currentFolderId.relativePath);
-        QVector<ExportFileInfo> files;
+        QVector<ExportFileInfo> collectedFiles;
+        const auto sourceRoot =
+            notebookService->buildAbsolutePath(p_context.currentFolderId.notebookId, relativePath);
+        const auto excludedOutputDir = excludedOutputDirForSource(p_option.m_outputDir, sourceRoot);
         collectExportFiles(p_context.currentFolderId.notebookId, relativePath, p_option.m_recursive,
-                           p_option.m_exportAttachments, files);
+                           p_option.m_exportAttachments, includeFolderHeadings, 2,
+                           excludedOutputDir, collectedFiles);
+
+        QVector<ExportFileInfo> files;
+        if (includeFolderHeadings && !collectedFiles.isEmpty()) {
+          appendFolderHeading(folderBatchName(p_context.currentFolderId.notebookId, relativePath),
+                              1, files);
+        }
+        files += collectedFiles;
         outputFiles = exporter->doExportBatch(
             p_option, files, folderBatchName(p_context.currentFolderId.notebookId, relativePath));
+        break;
+      }
+
+      case ExportSource::SelectedNodes: {
+        if (p_context.selectedNodeIds.isEmpty()) {
+          emit logRequested(tr("No selected nodes available for export."));
+          break;
+        }
+
+        QVector<ExportFileInfo> files;
+        for (const auto &nodeId : sortedNodeIds(p_context.selectedNodeIds)) {
+          if (!nodeId.isValid()) {
+            continue;
+          }
+
+          const auto relativePath = normalizedRelativePath(nodeId.relativePath);
+          const auto filePath = notebookService->buildAbsolutePath(nodeId.notebookId, relativePath);
+          if (filePath.isEmpty()) {
+            emit logRequested(tr("Failed to resolve file path for (%1).").arg(relativePath));
+            continue;
+          }
+
+          if (QFileInfo(filePath).isDir()) {
+            QVector<ExportFileInfo> collectedFiles;
+            const auto excludedOutputDir = excludedOutputDirForSource(p_option.m_outputDir, filePath);
+            collectExportFiles(nodeId.notebookId, relativePath, p_option.m_recursive,
+                               p_option.m_exportAttachments, includeFolderHeadings, 2,
+                               excludedOutputDir, collectedFiles);
+            if (includeFolderHeadings && !collectedFiles.isEmpty()) {
+              appendFolderHeading(folderBatchName(nodeId.notebookId, relativePath), 1, files);
+            }
+            files += collectedFiles;
+            continue;
+          }
+
+          if (includeFolderHeadings && !isMarkdownFile(filePath)) {
+            continue;
+          }
+
+          ExportFileInfo info;
+          info.filePath = filePath;
+          info.fileName = QFileInfo(filePath).fileName();
+          info.resourcePath = QFileInfo(filePath).absolutePath();
+          info.attachmentFolderPath =
+              p_option.m_exportAttachments
+                  ? notebookService->getAttachmentsFolder(nodeId.notebookId, relativePath)
+                  : QString();
+          info.isMarkdown = isMarkdownFile(filePath);
+          files.append(info);
+        }
+
+        outputFiles = exporter->doExportBatch(p_option, files, tr("selected_export"));
         break;
       }
 
@@ -132,9 +385,18 @@ void ExportController::doExport(const ExportOption &p_option, const ExportContex
           break;
         }
 
-        QVector<ExportFileInfo> files;
+        QVector<ExportFileInfo> collectedFiles;
+        const auto sourceRoot = notebookService->buildAbsolutePath(notebookId, QString());
+        const auto excludedOutputDir = excludedOutputDirForSource(p_option.m_outputDir, sourceRoot);
         collectExportFiles(notebookId, QStringLiteral("."), p_option.m_recursive,
-                           p_option.m_exportAttachments, files);
+                           p_option.m_exportAttachments, includeFolderHeadings, 2,
+                           excludedOutputDir, collectedFiles);
+
+        QVector<ExportFileInfo> files;
+        if (includeFolderHeadings && !collectedFiles.isEmpty()) {
+          appendFolderHeading(notebookBatchName(notebookId), 1, files);
+        }
+        files += collectedFiles;
         outputFiles = exporter->doExportBatch(p_option, files, notebookBatchName(notebookId));
         break;
       }
@@ -174,6 +436,8 @@ Exporter *ExportController::ensureExporter() {
 
 void ExportController::collectExportFiles(const QString &p_notebookId, const QString &p_folderPath,
                                           bool p_recursive, bool p_exportAttachments,
+                                          bool p_includeFolderHeadings, int p_folderHeadingLevel,
+                                          const QString &p_excludedOutputDir,
                                           QVector<ExportFileInfo> &p_files) {
   auto *notebookService = m_services.get<NotebookCoreService>();
   if (!notebookService) {
@@ -183,47 +447,76 @@ void ExportController::collectExportFiles(const QString &p_notebookId, const QSt
 
   const auto folderPath = normalizedRelativePath(p_folderPath);
   const auto children = notebookService->listFolderChildren(p_notebookId, folderPath);
+  const auto externalChildren = notebookService->listFolderExternal(p_notebookId, folderPath);
+  const auto absoluteFolderPath = notebookService->buildAbsolutePath(p_notebookId, folderPath);
+  const auto config = notebookService->getNotebookConfig(p_notebookId);
+  const auto assetsFolder =
+      config.value(QStringLiteral("assetsFolder")).toString(QStringLiteral("vx_assets"));
 
-  const auto fileArray = children.value(QStringLiteral("files")).toArray();
-  for (const auto &fileValue : fileArray) {
-    const auto fileObj = fileValue.toObject();
-    const auto name = fileObj.value(QStringLiteral("name")).toString();
-    if (name.isEmpty()) {
+  const auto entries = sortedChildEntries(children, externalChildren, absoluteFolderPath,
+                                          assetsFolder);
+  for (const auto &entry : entries) {
+    const auto relativePath =
+        folderPath.isEmpty() ? entry.m_name : folderPath + QLatin1Char('/') + entry.m_name;
+    const auto path = notebookService->buildAbsolutePath(p_notebookId, relativePath);
+    if (!isPathUnderDirectory(path, absoluteFolderPath)) {
+      emit logRequested(tr("Skip node outside selected folder (%1).").arg(relativePath));
       continue;
     }
 
-    const auto relativePath = folderPath.isEmpty() ? name : folderPath + QLatin1Char('/') + name;
-    const auto filePath = notebookService->buildAbsolutePath(p_notebookId, relativePath);
-    if (filePath.isEmpty()) {
-      emit logRequested(tr("Failed to resolve file path for (%1).").arg(relativePath));
+    QFileInfo pathInfo(path);
+    if (!pathInfo.exists()) {
+      emit logRequested(tr("Skip missing node (%1).").arg(relativePath));
+      continue;
+    }
+
+    if (pathInfo.isSymLink() || (entry.m_folder && !pathInfo.isDir()) ||
+        (!entry.m_folder && !pathInfo.isFile())) {
+      emit logRequested(tr("Skip invalid node (%1).").arg(relativePath));
+      continue;
+    }
+
+    if (isPathUnderDirectory(path, p_excludedOutputDir)) {
+      continue;
+    }
+
+    if (entry.m_folder) {
+      if (!p_recursive) {
+        continue;
+      }
+
+      if (p_includeFolderHeadings) {
+        QVector<ExportFileInfo> childFiles;
+        collectExportFiles(p_notebookId, relativePath, p_recursive, p_exportAttachments,
+                           p_includeFolderHeadings, p_folderHeadingLevel + 1,
+                           p_excludedOutputDir, childFiles);
+        if (!childFiles.isEmpty()) {
+          appendFolderHeading(entry.m_name, p_folderHeadingLevel, p_files);
+          p_files += childFiles;
+        }
+      } else {
+        collectExportFiles(p_notebookId, relativePath, p_recursive, p_exportAttachments,
+                           p_includeFolderHeadings, p_folderHeadingLevel + 1,
+                           p_excludedOutputDir, p_files);
+      }
+      continue;
+    }
+
+    const bool isMarkdown = isMarkdownFile(path);
+    if (p_includeFolderHeadings && !isMarkdown) {
       continue;
     }
 
     ExportFileInfo info;
-    info.filePath = filePath;
-    info.fileName = name;
-    info.resourcePath = QFileInfo(filePath).absolutePath();
+    info.filePath = path;
+    info.fileName = entry.m_name;
+    info.resourcePath = pathInfo.absolutePath();
     info.attachmentFolderPath =
         p_exportAttachments ? notebookService->getAttachmentsFolder(p_notebookId, relativePath)
                             : QString();
-    info.isMarkdown = isMarkdownFile(filePath);
+    info.isMarkdown = isMarkdown;
+    info.headingLevelOffset = p_includeFolderHeadings ? qMax(0, p_folderHeadingLevel - 1) : 0;
     p_files.append(info);
-  }
-
-  if (!p_recursive) {
-    return;
-  }
-
-  const auto folderArray = children.value(QStringLiteral("folders")).toArray();
-  for (const auto &folderValue : folderArray) {
-    const auto folderObj = folderValue.toObject();
-    const auto name = folderObj.value(QStringLiteral("name")).toString();
-    if (name.isEmpty()) {
-      continue;
-    }
-
-    const auto childFolderPath = folderPath.isEmpty() ? name : folderPath + QLatin1Char('/') + name;
-    collectExportFiles(p_notebookId, childFolderPath, p_recursive, p_exportAttachments, p_files);
   }
 }
 
