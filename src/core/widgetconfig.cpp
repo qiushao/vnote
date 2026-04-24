@@ -12,14 +12,11 @@ WidgetConfig::WidgetConfig(IConfigMgr *p_mgr, IConfig *p_topConfig) : IConfig(p_
 }
 
 void WidgetConfig::fromJson(const QJsonObject &p_jobj) {
-
   {
     m_outlineAutoExpandedLevel = READINT(QStringLiteral("outlineAutoExpandedLevel"));
     if (m_outlineAutoExpandedLevel < 0 || m_outlineAutoExpandedLevel > 6) {
       m_outlineAutoExpandedLevel = 6;
     }
-
-    m_outlineSectionNumberEnabled = READBOOL(QStringLiteral("outlineSectionNumberEnabled"));
   }
 
   m_findAndReplaceOptions =
@@ -37,8 +34,8 @@ void WidgetConfig::fromJson(const QJsonObject &p_jobj) {
     m_nodeExplorerCloseBeforeOpenWithEnabled =
         READBOOL(QStringLiteral("nodeExplorerCloseBeforeOpenWithEnabled"));
   }
-    m_nodeExplorerSingleClickActivation =
-        READBOOL(QStringLiteral("nodeExplorerSingleClickActivation"));
+  m_nodeExplorerSingleClickActivation =
+      READBOOL(QStringLiteral("nodeExplorerSingleClickActivation"));
 
   m_searchPanelAdvancedSettingsVisible =
       READBOOL(QStringLiteral("searchPanelAdvancedSettingsVisible"));
@@ -83,7 +80,6 @@ void WidgetConfig::fromJson(const QJsonObject &p_jobj) {
 QJsonObject WidgetConfig::toJson() const {
   QJsonObject obj;
   obj[QStringLiteral("outlineAutoExpandedLevel")] = m_outlineAutoExpandedLevel;
-  obj[QStringLiteral("outlineSectionNumberEnabled")] = m_outlineSectionNumberEnabled;
 
   obj[QStringLiteral("findAndReplaceOptions")] = static_cast<int>(m_findAndReplaceOptions);
 
@@ -123,12 +119,6 @@ int WidgetConfig::getOutlineAutoExpandedLevel() const { return m_outlineAutoExpa
 
 void WidgetConfig::setOutlineAutoExpandedLevel(int p_level) {
   updateConfig(m_outlineAutoExpandedLevel, p_level, this);
-}
-
-bool WidgetConfig::getOutlineSectionNumberEnabled() const { return m_outlineSectionNumberEnabled; }
-
-void WidgetConfig::setOutlineSectionNumberEnabled(bool p_enabled) {
-  updateConfig(m_outlineSectionNumberEnabled, p_enabled, this);
 }
 
 FindOptions WidgetConfig::getFindAndReplaceOptions() const { return m_findAndReplaceOptions; }

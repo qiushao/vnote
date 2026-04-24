@@ -25,10 +25,6 @@ struct OutlineNode {
   // -1 for virtual/gap-filling nodes.
   int m_headingIndex = -1;
 
-  // Precomputed section number string (e.g., "1.2.").
-  // Empty when section numbering is disabled.
-  QString m_sectionNumber;
-
   OutlineNode *m_parent = nullptr;
   QVector<OutlineNode *> m_children;
 };
@@ -59,11 +55,6 @@ public:
   // Set/get the current heading index (for highlighting in the view).
   void setCurrentHeadingIndex(int p_idx);
   int getCurrentHeadingIndex() const;
-
-  // Section number display configuration.
-  void setSectionNumberEnabled(bool p_enabled);
-  void setSectionNumberBaseLevel(int p_level);
-  void setSectionNumberEndingDot(bool p_endingDot);
 
   // Get the QModelIndex for a given heading index (for the view to highlight).
   QModelIndex indexForHeadingIndex(int p_headingIndex) const;
@@ -96,11 +87,6 @@ private:
 
   // Index of the heading currently under the cursor.
   int m_currentHeadingIndex = -1;
-
-  // Section number configuration.
-  bool m_sectionNumberEnabled = true;
-  int m_sectionNumberBaseLevel = 1;  // 1-based. -1 to disable.
-  bool m_sectionNumberEndingDot = true;
 };
 
 } // namespace vnotex

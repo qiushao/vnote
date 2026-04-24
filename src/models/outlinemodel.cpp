@@ -1,7 +1,5 @@
 #include "outlinemodel.h"
 
-#include <QStack>
-
 #include <widgets/outlineprovider.h>
 
 using namespace vnotex;
@@ -27,13 +25,6 @@ void OutlineModel::setOutline(const QSharedPointer<Outline> &p_outline) {
   m_outline = p_outline;
   m_currentHeadingIndex = -1;
 
-  // Pick up section number config from the outline if provided.
-  if (m_outline) {
-    m_sectionNumberBaseLevel = m_outline->m_sectionNumberBaseLevel;
-    m_sectionNumberEndingDot = m_outline->m_sectionNumberEndingDot;
-    m_sectionNumberEnabled = (m_outline->m_sectionNumberBaseLevel != -1);
-  }
-
   buildTree();
 
   endResetModel();
@@ -45,45 +36,6 @@ void OutlineModel::setCurrentHeadingIndex(int p_idx) {
 
 int OutlineModel::getCurrentHeadingIndex() const {
   return m_currentHeadingIndex;
-}
-
-void OutlineModel::setSectionNumberEnabled(bool p_enabled) {
-  if (m_sectionNumberEnabled == p_enabled) {
-    return;
-  }
-
-  m_sectionNumberEnabled = p_enabled;
-
-  // Rebuild tree to recompute display strings.
-  beginResetModel();
-  buildTree();
-  endResetModel();
-}
-
-void OutlineModel::setSectionNumberBaseLevel(int p_level) {
-  if (m_sectionNumberBaseLevel == p_level) {
-    return;
-  }
-
-  m_sectionNumberBaseLevel = p_level;
-
-  // Rebuild tree to recompute section numbers.
-  beginResetModel();
-  buildTree();
-  endResetModel();
-}
-
-void OutlineModel::setSectionNumberEndingDot(bool p_endingDot) {
-  if (m_sectionNumberEndingDot == p_endingDot) {
-    return;
-  }
-
-  m_sectionNumberEndingDot = p_endingDot;
-
-  // Rebuild tree to recompute section numbers.
-  beginResetModel();
-  buildTree();
-  endResetModel();
 }
 
 QModelIndex OutlineModel::indexForHeadingIndex(int p_headingIndex) const {
@@ -167,12 +119,8 @@ QVariant OutlineModel::data(const QModelIndex &p_index, int p_role) const {
   }
 
   switch (p_role) {
-  case Qt::DisplayRole: {
-    if (m_sectionNumberEnabled && !node->m_sectionNumber.isEmpty()) {
-      return node->m_sectionNumber + QLatin1Char(' ') + node->m_name;
-    }
+  case Qt::DisplayRole:
     return node->m_name;
-  }
 
   case Qt::ToolTipRole:
     return node->m_name;
@@ -220,20 +168,7 @@ void OutlineModel::buildTree() {
     }
   }
 
-  // Initialize section number vector.
-  // Levels are 1-based; the vector is indexed by level.
-  // Allocate enough slots for the maximum level encountered.
-  int maxLevel = 0;
-  for (const auto &h : perfectHeadings) {
-    if (h.m_level > maxLevel) {
-      maxLevel = h.m_level;
-    }
-  }
-
-  SectionNumber sectionNumber(maxLevel + 1, 0);
-
   // Build tree nodes.
-  // Maintain a stack of (level, node) to track current nesting position.
   // m_root acts as the virtual parent at level 0.
   OutlineNode *currentParent = m_root;
   int currentLevel = 0;
@@ -241,12 +176,6 @@ void OutlineModel::buildTree() {
   for (int i = 0; i < perfectHeadings.size(); ++i) {
     const auto &heading = perfectHeadings[i];
     int level = heading.m_level;
-
-    // Compute section number for this heading.
-    if (m_sectionNumberEnabled && m_sectionNumberBaseLevel > 0) {
-      OutlineProvider::increaseSectionNumber(
-          sectionNumber, level, m_sectionNumberBaseLevel);
-    }
 
     // Navigate to the correct parent based on level.
     if (level > currentLevel) {
@@ -275,12 +204,6 @@ void OutlineModel::buildTree() {
     node->m_level = level;
     node->m_headingIndex = perfectToOriginal[i];
     node->m_parent = currentParent;
-
-    // Compute section number string.
-    if (m_sectionNumberEnabled && m_sectionNumberBaseLevel > 0) {
-      node->m_sectionNumber = OutlineProvider::joinSectionNumber(
-          sectionNumber, m_sectionNumberEndingDot);
-    }
 
     currentParent->m_children.append(node);
 

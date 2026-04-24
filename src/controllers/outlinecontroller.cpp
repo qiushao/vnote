@@ -20,9 +20,7 @@ OutlineController::OutlineController(ServiceLocator &p_services, QObject *p_pare
   auto *configMgr = m_services.get<ConfigMgr2>();
   if (configMgr) {
     m_autoExpandedLevel = configMgr->getWidgetConfig().getOutlineAutoExpandedLevel();
-    m_sectionNumberEnabled = configMgr->getWidgetConfig().getOutlineSectionNumberEnabled();
   }
-  m_model->setSectionNumberEnabled(m_sectionNumberEnabled);
 
   // Setup debounce timer for auto-expand after heading changes.
   m_expandTimer = new QTimer(this);
@@ -133,20 +131,6 @@ void OutlineController::decreaseExpandLevel() {
 
 int OutlineController::getExpandLevel() const { return m_autoExpandedLevel; }
 
-void OutlineController::toggleSectionNumber() {
-  m_sectionNumberEnabled = !m_sectionNumberEnabled;
-
-  // Persist to config.
-  auto *configMgr = m_services.get<ConfigMgr2>();
-  if (configMgr) {
-    configMgr->getWidgetConfig().setOutlineSectionNumberEnabled(m_sectionNumberEnabled);
-  }
-
-  m_model->setSectionNumberEnabled(m_sectionNumberEnabled);
-}
-
-bool OutlineController::isSectionNumberEnabled() const { return m_sectionNumberEnabled; }
-
 int OutlineController::getBaseLevel() const {
   if (!m_provider) {
     return 1;
@@ -168,12 +152,6 @@ void OutlineController::updateModelFromProvider() {
   if (m_provider) {
     const auto &outline = m_provider->getOutline();
     m_model->setOutline(outline);
-
-    // Apply section number base level from outline data.
-    if (outline) {
-      m_model->setSectionNumberBaseLevel(outline->m_sectionNumberBaseLevel);
-      m_model->setSectionNumberEndingDot(outline->m_sectionNumberEndingDot);
-    }
 
     // Update current heading highlight.
     int idx = m_provider->getCurrentHeadingIndex();

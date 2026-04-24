@@ -21,9 +21,6 @@ public:
   int getOutlineAutoExpandedLevel() const;
   void setOutlineAutoExpandedLevel(int p_level);
 
-  bool getOutlineSectionNumberEnabled() const;
-  void setOutlineSectionNumberEnabled(bool p_enabled);
-
   FindOptions getFindAndReplaceOptions() const;
   void setFindAndReplaceOptions(FindOptions p_options);
 
@@ -95,8 +92,6 @@ public:
 
 private:
   int m_outlineAutoExpandedLevel = 6;
-
-  bool m_outlineSectionNumberEnabled = false;
 
   FindOptions m_findAndReplaceOptions = FindOption::IncrementalSearch;
 

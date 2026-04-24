@@ -28,3 +28,11 @@ add_qt_test(test_snippetmodel
     vxcore
   GUILESS
 )
+
+add_qt_test(test_outlinemodel
+  SOURCES
+    test_outlinemodel.cpp
+    ${CMAKE_SOURCE_DIR}/src/models/outlinemodel.cpp
+    ${CMAKE_SOURCE_DIR}/src/widgets/outlineprovider.cpp
+  GUILESS
+)

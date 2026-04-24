@@ -16,7 +16,7 @@ class ServiceLocator;
 // Controller that orchestrates the OutlineModel and OutlineView for the
 // outline (table of contents) panel. Bridges between OutlineProvider (the
 // data source from the active ViewWindow) and the MVC components. Handles
-// config reads/writes for expand level and section number settings.
+// config reads/writes for expand level.
 //
 // This is a QObject, NOT a QWidget. It is testable and does not own the view.
 class OutlineController : public QObject {
@@ -47,10 +47,6 @@ public:
   // Apply current expand level to the view.
   void applyExpandLevel();
 
-  // Section number toggle.
-  void toggleSectionNumber();
-  bool isSectionNumberEnabled() const;
-
 signals:
   // Emitted when expand level changes (for UI to show tooltip).
   void expandLevelChanged(int p_level);
@@ -72,7 +68,6 @@ private:
   QSharedPointer<OutlineProvider> m_provider;
   QTimer *m_expandTimer = nullptr;       // Debounce timer for auto-expand
   int m_autoExpandedLevel = 6;           // Cached from config
-  bool m_sectionNumberEnabled = false;   // Cached from config
 };
 
 } // namespace vnotex

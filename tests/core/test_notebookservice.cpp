@@ -35,6 +35,7 @@ private slots:
   void testDeleteFolder();
   void testRenameFolderAndMove();
   void testCopyFolder();
+  void testGetNodePathByIdForRawNotebook();
 
   // File operations tests.
   void testCreateFile();
@@ -273,6 +274,25 @@ void TestNotebookService::testCopyFolder() {
 
   QJsonObject copiedConfig = m_service->getFolderConfig(nbId, "DestParent/CopiedFolder");
   QVERIFY(!copiedConfig.isEmpty());
+}
+
+void TestNotebookService::testGetNodePathByIdForRawNotebook() {
+  QString nbPath = m_tempDir.filePath("raw_path_lookup_notebook");
+  QString configJson = R"({
+    "name": "Raw Notebook",
+    "description": "Raw notebook for unit tests",
+    "version": "1"
+  })";
+  QString nbId = m_service->createNotebook(nbPath, configJson, NotebookType::Raw);
+  QVERIFY(!nbId.isEmpty());
+
+  QString folderId = m_service->createFolder(nbId, QString(), QStringLiteral("docs"));
+  QVERIFY(!folderId.isEmpty());
+  QCOMPARE(m_service->getNodePathById(nbId, folderId), QStringLiteral("docs"));
+
+  QString fileId = m_service->createFile(nbId, QString(), QStringLiteral("note.md"));
+  QVERIFY(!fileId.isEmpty());
+  QCOMPARE(m_service->getNodePathById(nbId, fileId), QStringLiteral("note.md"));
 }
 
 void TestNotebookService::testCreateFile() {

@@ -173,12 +173,25 @@ QString NotebookCoreService::getNodePathById(const QString &p_notebookId,
   char *path = nullptr;
   VxCoreError err = vxcore_node_get_path_by_id(m_context, p_notebookId.toUtf8().constData(),
                                                p_nodeId.toUtf8().constData(), &path);
-  if (err != VXCORE_OK) {
-    qWarning() << "getNodePathById failed:" << QString::fromUtf8(vxcore_error_message(err))
-               << "notebookId:" << p_notebookId << "nodeId:" << p_nodeId;
-    return QString();
+  if (err == VXCORE_OK) {
+    return cstrToQString(path);
   }
-  return cstrToQString(path);
+
+  // Raw notebooks encode the relative path directly in the synthetic node ID.
+  const QString rawFilePrefix = QStringLiteral("raw-file:");
+  const QString rawFolderPrefix = QStringLiteral("raw-folder:");
+  if (p_nodeId.startsWith(rawFilePrefix)) {
+    return p_nodeId.mid(rawFilePrefix.size());
+  }
+
+  if (p_nodeId.startsWith(rawFolderPrefix)) {
+    QString relativePath = p_nodeId.mid(rawFolderPrefix.size());
+    return relativePath == QStringLiteral(".") ? QString() : relativePath;
+  }
+
+  qWarning() << "getNodePathById failed:" << QString::fromUtf8(vxcore_error_message(err))
+             << "notebookId:" << p_notebookId << "nodeId:" << p_nodeId;
+  return QString();
 }
 
 bool NotebookCoreService::unindexNode(const QString &p_notebookId, const QString &p_nodePath) {
