@@ -379,118 +379,53 @@ QString Exporter::doExportPdfAllInOne(const ExportOption &p_option,
       FileUtils::generateFileNameWithSequence(outputFolder, tr("all_in_one_export"), "pdf");
   auto destFilePath = PathUtils::concatenateFilePath(outputFolder, fileName);
 
-  if (!p_option.m_pdfOption.m_useWkhtmltopdf) {
-    QString combinedContent;
-    bool previousWasHeading = false;
-    emit progressUpdated(0, p_files.size());
-    for (int i = 0; i < p_files.size(); ++i) {
-      if (checkAskedToStop()) {
-        return QString();
-      }
-
-      if (p_files[i].isSectionHeading) {
-        appendAllInOneSeparator(combinedContent, previousWasHeading);
-        combinedContent += sectionHeadingMarkdown(p_files[i]);
-        previousWasHeading = true;
-        emit progressUpdated(i + 1, p_files.size());
-        continue;
-      }
-
-      try {
-        auto content = FileUtils::readTextFile(p_files[i].filePath);
-        if (p_files[i].isMarkdown) {
-          content = shiftMarkdownHeadingLevels(content, p_files[i].headingLevelOffset);
-          content = convertLocalMarkdownImagesToAbsoluteUrls(content, p_files[i].resourcePath);
-        }
-
-        appendAllInOneSeparator(combinedContent, previousWasHeading);
-        combinedContent += content;
-        previousWasHeading = false;
-      } catch (const Exception &e) {
-        emit logRequested(tr("Failed to read file (%1): %2")
-                              .arg(p_files[i].filePath, QString::fromUtf8(e.what())));
-      }
-
-      emit progressUpdated(i + 1, p_files.size());
-    }
-
-    if (combinedContent.isEmpty() || checkAskedToStop()) {
-      return QString();
-    }
-
-    emit logRequested(tr("Rendering combined PDF..."));
-    emit progressUpdated(0, 0);
-    const auto outputFile = doExportPdf(p_option, outputFolder, combinedContent, QString(),
-                                        QStringLiteral("all_in_one_export.md"), outputFolder,
-                                        destFilePath,
-                                        QString());
-    if (!outputFile.isEmpty()) {
-      emit logRequested(tr("Exported to (%1).").arg(outputFile));
-    }
-    return outputFile;
-  }
-
-  QTemporaryDir tmpDir;
-  if (!tmpDir.isValid()) {
-    emit logRequested(tr("Failed to create temporary directory to hold HTML files."));
-    return QString();
-  }
-
-  auto tmpOption(getExportOptionForIntermediateHtml(p_option, tmpDir.path()));
-
-  QStringList htmlFiles;
+  QString combinedContent;
+  bool previousWasHeading = false;
   emit progressUpdated(0, p_files.size());
   for (int i = 0; i < p_files.size(); ++i) {
     if (checkAskedToStop()) {
       return QString();
     }
 
-    QString htmlFile;
     if (p_files[i].isSectionHeading) {
-      htmlFile = doExportHtml(tmpOption, tmpDir.path(), sectionHeadingMarkdown(p_files[i]),
-                              QString(), QStringLiteral("section_heading.md"), tmpDir.path(),
-                              QString(), QString());
-    } else if (p_files[i].isMarkdown) {
-      try {
-        auto content = FileUtils::readTextFile(p_files[i].filePath);
+      appendAllInOneSeparator(combinedContent, previousWasHeading);
+      combinedContent += sectionHeadingMarkdown(p_files[i]);
+      previousWasHeading = true;
+      emit progressUpdated(i + 1, p_files.size());
+      continue;
+    }
+
+    try {
+      auto content = FileUtils::readTextFile(p_files[i].filePath);
+      if (p_files[i].isMarkdown) {
         content = shiftMarkdownHeadingLevels(content, p_files[i].headingLevelOffset);
-        htmlFile = doExportHtml(tmpOption, tmpDir.path(), content, p_files[i].filePath,
-                                p_files[i].fileName, p_files[i].resourcePath, QString(),
-                                QString());
-      } catch (const Exception &e) {
-        emit logRequested(tr("Failed to read file (%1): %2")
-                              .arg(p_files[i].filePath, QString::fromUtf8(e.what())));
+        content = convertLocalMarkdownImagesToAbsoluteUrls(content, p_files[i].resourcePath);
       }
-    } else {
-      htmlFile = doExportHtml(tmpOption, tmpDir.path(), QString(), p_files[i].filePath,
-                              p_files[i].fileName, p_files[i].resourcePath, QString(),
-                              QString());
+
+      appendAllInOneSeparator(combinedContent, previousWasHeading);
+      combinedContent += content;
+      previousWasHeading = false;
+    } catch (const Exception &e) {
+      emit logRequested(
+          tr("Failed to read file (%1): %2").arg(p_files[i].filePath, QString::fromUtf8(e.what())));
     }
-    if (!htmlFile.isEmpty()) {
-      htmlFiles << htmlFile;
-    }
+
     emit progressUpdated(i + 1, p_files.size());
   }
 
-  cleanUpWebViewExporter();
-
-  if (htmlFiles.isEmpty()) {
-    return QString();
-  }
-
-  if (checkAskedToStop()) {
+  if (combinedContent.isEmpty() || checkAskedToStop()) {
     return QString();
   }
 
   emit logRequested(tr("Rendering combined PDF..."));
   emit progressUpdated(0, 0);
-  if (getWebViewExporter(p_option)->htmlToPdfViaWkhtmltopdf(p_option.m_pdfOption, htmlFiles,
-                                                            destFilePath)) {
-    emit logRequested(tr("Exported to (%1).").arg(destFilePath));
-    return destFilePath;
+  const auto outputFile =
+      doExportPdf(p_option, outputFolder, combinedContent, QString(),
+                  QStringLiteral("all_in_one_export.md"), outputFolder, destFilePath, QString());
+  if (!outputFile.isEmpty()) {
+    emit logRequested(tr("Exported to (%1).").arg(outputFile));
   }
-
-  return QString();
+  return outputFile;
 }
 
 QString Exporter::doExportCustomAllInOne(const ExportOption &p_option,

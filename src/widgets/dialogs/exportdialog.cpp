@@ -2,8 +2,6 @@
 
 #include <QCheckBox>
 #include <QCoreApplication>
-#include <QFileDialog>
-#include <QFileInfo>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -387,17 +385,7 @@ void ExportDialog::updateUIOnExport() {
 }
 
 int ExportDialog::doExport(ExportOption p_option) {
-  if (p_option.m_targetFormat == ExportFormat::PDF && p_option.m_pdfOption.m_useWkhtmltopdf) {
-    // Check wkhtmltopdf executable.
-    const auto &wkExePath = p_option.m_pdfOption.m_wkhtmltopdfExePath;
-    if (wkExePath.isEmpty() || !QFileInfo::exists(wkExePath)) {
-      appendLog(tr("Please specify a valid wkhtmltopdf executable file (%1)").arg(wkExePath));
-      return 0;
-    }
-
-    p_option.m_transformSvgToPngEnabled = true;
-    p_option.m_removeCodeToolBarEnabled = true;
-  } else if (p_option.m_targetFormat == ExportFormat::Custom) {
+  if (p_option.m_targetFormat == ExportFormat::Custom) {
     int optIdx = findCustomOption(p_option.m_customExport);
     if (optIdx == -1) {
       appendLog(tr("Please specify a valid scheme"));
@@ -608,61 +596,14 @@ QWidget *ExportDialog::getPdfAdvancedSettings() {
     }
 
     {
-      m_addTableOfContentsCheckBox =
-          WidgetsFactory::createCheckBox(tr("Add visible table of contents"), widget);
-      layout->addRow(m_addTableOfContentsCheckBox);
-    }
-
-    {
       m_addPdfOutlineCheckBox = WidgetsFactory::createCheckBox(tr("Add PDF outline"), widget);
       layout->addRow(m_addPdfOutlineCheckBox);
-    }
-
-    {
-      auto useLayout = new QHBoxLayout();
-
-      m_useWkhtmltopdfCheckBox =
-          WidgetsFactory::createCheckBox(tr("Use wkhtmltopdf (outline supported)"), widget);
-      useLayout->addWidget(m_useWkhtmltopdfCheckBox);
-
-      auto downloadBtn = new QPushButton(tr("Download"), widget);
-      connect(downloadBtn, &QPushButton::clicked, this, []() {
-        WidgetUtils::openUrlByDesktop(QUrl("https://wkhtmltopdf.org/downloads.html"));
-      });
-      useLayout->addWidget(downloadBtn);
-
-      layout->addRow(useLayout);
     }
 
     {
       m_allInOneCheckBox = WidgetsFactory::createCheckBox(tr("All-in-One"), widget);
       m_allInOneCheckBox->setToolTip(tr("Export all source files into one file"));
       layout->addRow(m_allInOneCheckBox);
-    }
-
-    {
-      auto pathLayout = new QHBoxLayout();
-
-      m_wkhtmltopdfExePathLineEdit = WidgetsFactory::createLineEdit(widget);
-      pathLayout->addWidget(m_wkhtmltopdfExePathLineEdit);
-
-      auto browseBtn = new QPushButton(tr("Browse"), widget);
-      pathLayout->addWidget(browseBtn);
-      connect(browseBtn, &QPushButton::clicked, this, [this]() {
-        QString filePath = QFileDialog::getOpenFileName(this, tr("Select wkhtmltopdf Executable"),
-                                                        QCoreApplication::applicationDirPath());
-
-        if (!filePath.isEmpty()) {
-          m_wkhtmltopdfExePathLineEdit->setText(filePath);
-        }
-      });
-
-      layout->addRow(tr("Wkhtmltopdf path:"), pathLayout);
-    }
-
-    {
-      m_wkhtmltopdfArgsLineEdit = WidgetsFactory::createLineEdit(widget);
-      layout->addRow(tr("Wkhtmltopdf arguments:"), m_wkhtmltopdfArgsLineEdit);
     }
 
     m_advancedGroupBox->layout()->addWidget(widget);
@@ -781,22 +722,14 @@ void ExportDialog::restoreFields(const ExportPdfOption &p_option) {
   m_pageLayout = p_option.m_layout;
   updatePageLayoutButtonLabel();
 
-  m_addTableOfContentsCheckBox->setChecked(p_option.m_addTableOfContents);
   m_addPdfOutlineCheckBox->setChecked(p_option.m_addPdfOutline);
-  m_useWkhtmltopdfCheckBox->setChecked(p_option.m_useWkhtmltopdf);
   m_allInOneCheckBox->setChecked(p_option.m_allInOne);
-  m_wkhtmltopdfExePathLineEdit->setText(p_option.m_wkhtmltopdfExePath);
-  m_wkhtmltopdfArgsLineEdit->setText(p_option.m_wkhtmltopdfArgs);
 }
 
 void ExportDialog::saveFields(ExportPdfOption &p_option) {
   p_option.m_layout = m_pageLayout;
-  p_option.m_addTableOfContents = m_addTableOfContentsCheckBox->isChecked();
   p_option.m_addPdfOutline = m_addPdfOutlineCheckBox->isChecked();
-  p_option.m_useWkhtmltopdf = m_useWkhtmltopdfCheckBox->isChecked();
   p_option.m_allInOne = m_allInOneCheckBox->isChecked();
-  p_option.m_wkhtmltopdfExePath = m_wkhtmltopdfExePathLineEdit->text();
-  p_option.m_wkhtmltopdfArgs = m_wkhtmltopdfArgsLineEdit->text();
 }
 
 void ExportDialog::restoreCustomFields(const ExportOption &p_option) {

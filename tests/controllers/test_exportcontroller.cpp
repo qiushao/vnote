@@ -70,11 +70,6 @@ void WebViewExporter::clear() {}
 
 void WebViewExporter::stop() {}
 
-bool WebViewExporter::htmlToPdfViaWkhtmltopdf(const ExportPdfOption &, const QStringList &,
-                                              const QString &) {
-  return false;
-}
-
 void ContentMediaUtils::copyMediaFiles(const QString &, INotebookBackend *, const QString &) {}
 
 ProcessUtils::State ProcessUtils::start(const QString &, const QStringList &,

@@ -161,17 +161,9 @@ private:
   // PDF settings.
   QPushButton *m_pageLayoutBtn = nullptr;
 
-  QCheckBox *m_addTableOfContentsCheckBox = nullptr;
-
   QCheckBox *m_addPdfOutlineCheckBox = nullptr;
 
-  QCheckBox *m_useWkhtmltopdfCheckBox = nullptr;
-
   QCheckBox *m_allInOneCheckBox = nullptr;
-
-  QLineEdit *m_wkhtmltopdfExePathLineEdit = nullptr;
-
-  QLineEdit *m_wkhtmltopdfArgsLineEdit = nullptr;
 
   QSharedPointer<QPageLayout> m_pageLayout;
 

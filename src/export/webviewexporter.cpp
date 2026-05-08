@@ -2,9 +2,7 @@
 
 #include <QDir>
 #include <QFileInfo>
-#include <QProcess>
 #include <QRegularExpression>
-#include <QTemporaryDir>
 #include <QVariant>
 #include <QVector>
 #include <QWebEnginePage>
@@ -17,9 +15,7 @@
 #include <core/markdowneditorconfig.h>
 #include <gui/services/themeservice.h>
 #include <utils/fileutils.h>
-#include <utils/htmlutils.h>
 #include <utils/pathutils.h>
-#include <utils/processutils.h>
 #include <utils/utils.h>
 #include <utils/webutils.h>
 #include <widgets/editors/markdownviewer.h>
@@ -68,85 +64,6 @@ QString fillScriptTag(const QString &p_scriptFile) {
   const auto url = PathUtils::pathToUrl(p_scriptFile);
   return QStringLiteral("<script type=\"text/javascript\" src=\"%1\"></script>\n")
       .arg(url.toString());
-}
-
-struct MarkdownHeading {
-  int m_level = 1;
-  QString m_text;
-};
-
-QString cleanedHeadingText(QString p_text) {
-  p_text.remove(QRegularExpression(QStringLiteral("\\s+#+\\s*$")));
-  p_text.replace(QRegularExpression(QStringLiteral("!\\[([^\\]]*)\\]\\([^\\)]*\\)")),
-                 QStringLiteral("\\1"));
-  p_text.replace(QRegularExpression(QStringLiteral("\\[([^\\]]+)\\]\\([^\\)]*\\)")),
-                 QStringLiteral("\\1"));
-  p_text.remove(QRegularExpression(QStringLiteral("[`*_~]")));
-  return p_text.trimmed();
-}
-
-QVector<MarkdownHeading> extractMarkdownHeadings(const QString &p_content) {
-  QVector<MarkdownHeading> headings;
-  bool inFence = false;
-  QChar fenceMarker;
-  const QRegularExpression headingRe(QStringLiteral("^\\s{0,3}(#{1,6})\\s+(.+?)\\s*$"));
-
-  const auto lines = p_content.split(QLatin1Char('\n'));
-  for (const auto &line : lines) {
-    const auto trimmed = line.trimmed();
-    if (trimmed.startsWith(QStringLiteral("```")) || trimmed.startsWith(QStringLiteral("~~~"))) {
-      const auto marker = trimmed[0];
-      if (!inFence) {
-        inFence = true;
-        fenceMarker = marker;
-      } else if (fenceMarker == marker) {
-        inFence = false;
-      }
-      continue;
-    }
-
-    if (inFence) {
-      continue;
-    }
-
-    const auto match = headingRe.match(line);
-    if (!match.hasMatch()) {
-      continue;
-    }
-
-    const auto text = cleanedHeadingText(match.captured(2));
-    if (text.isEmpty()) {
-      continue;
-    }
-
-    MarkdownHeading heading;
-    heading.m_level = match.captured(1).size();
-    heading.m_text = text;
-    headings.append(heading);
-  }
-
-  return headings;
-}
-
-QString buildMarkdownTableOfContents(const QString &p_content, const QString &p_title) {
-  const auto headings = extractMarkdownHeadings(p_content);
-  if (headings.isEmpty()) {
-    return QString();
-  }
-
-  int baseLevel = 6;
-  for (const auto &heading : headings) {
-    baseLevel = qMin(baseLevel, heading.m_level);
-  }
-
-  QString toc = QStringLiteral("**%1**\n\n").arg(p_title);
-  for (const auto &heading : headings) {
-    const int indentLevel = qMax(0, heading.m_level - baseLevel);
-    toc += QString(indentLevel * 2, QLatin1Char(' '));
-    toc += QStringLiteral("- %1\n").arg(heading.m_text);
-  }
-
-  return toc.trimmed();
 }
 
 void fillGlobalOptions(QString &p_template, const MarkdownWebGlobalOptions &p_opts) {
@@ -340,15 +257,7 @@ bool vnotex::WebViewExporter::doExport(const ExportOption &p_option, const QStri
   auto baseUrl = PathUtils::pathToUrl(contentPath);
   m_viewer->adapter()->reset();
   m_viewer->setHtml(m_htmlTemplate, baseUrl);
-
-  auto textContent = p_content;
-  if (p_option.m_targetFormat == ExportFormat::PDF && p_option.m_pdfOption.m_addTableOfContents) {
-    const auto toc = buildMarkdownTableOfContents(textContent, tr("Table of Contents"));
-    if (!toc.isEmpty()) {
-      textContent = toc + QStringLiteral("\n\n") + textContent;
-    }
-  }
-  m_viewer->adapter()->setText(textContent);
+  m_viewer->adapter()->setText(p_content);
 
   while (!isWebViewReady()) {
     Utils::sleepWait(100);
@@ -377,9 +286,7 @@ bool vnotex::WebViewExporter::doExport(const ExportOption &p_option, const QStri
     break;
 
   case ExportFormat::PDF:
-    if (p_option.m_pdfOption.m_useWkhtmltopdf) {
-      ret = doExportWkhtmltopdf(p_option.m_pdfOption, p_destPath, baseUrl);
-    } else {
+    {
       const auto outlineItems = p_option.m_pdfOption.m_addPdfOutline
                                     ? collectPdfOutlineItems(p_option.m_pdfOption)
                                     : QVector<PdfOutlineItem>();
@@ -532,10 +439,8 @@ void WebViewExporter::prepare(const ExportOption &p_option) {
   }
 
   const auto &config = configMgr->getEditorConfig().getMarkdownEditorConfig();
-  bool useWkhtmltopdf = false;
   QSize pageBodySize(1024, 768);
   if (p_option.m_targetFormat == ExportFormat::PDF) {
-    useWkhtmltopdf = p_option.m_pdfOption.m_useWkhtmltopdf;
     pageBodySize = pageLayoutSize(*(p_option.m_pdfOption.m_layout));
   }
 
@@ -565,7 +470,7 @@ void WebViewExporter::prepare(const ExportOption &p_option) {
   paras.m_bodyWidth = pageBodySize.width();
   paras.m_bodyHeight = pageBodySize.height();
   paras.m_transformSvgToPngEnabled = p_option.m_transformSvgToPngEnabled;
-  paras.m_mathJaxScale = useWkhtmltopdf ? 2.5 : -1;
+  paras.m_mathJaxScale = -1;
   paras.m_removeCodeToolBarEnabled = p_option.m_removeCodeToolBarEnabled;
 
   m_htmlTemplate = generateMarkdownViewerTemplate(*configMgr, config, paras);
@@ -576,58 +481,6 @@ void WebViewExporter::prepare(const ExportOption &p_option) {
     m_exportHtmlTemplate = generateMarkdownExportTemplate(*configMgr, config, addOutlinePanel);
   }
 
-  if (useWkhtmltopdf) {
-    prepareWkhtmltopdfArguments(p_option.m_pdfOption);
-  }
-}
-
-static QString marginToStrMM(qreal p_margin) { return QStringLiteral("%1mm").arg(p_margin); }
-
-void WebViewExporter::prepareWkhtmltopdfArguments(const ExportPdfOption &p_pdfOption) {
-  m_wkhtmltopdfArgs.clear();
-
-  // Page layout.
-  {
-    const auto &layout = p_pdfOption.m_layout;
-    m_wkhtmltopdfArgs << "--page-size" << layout->pageSize().key();
-    m_wkhtmltopdfArgs << "--orientation"
-                      << (layout->orientation() == QPageLayout::Portrait ? "Portrait"
-                                                                         : "Landscape");
-
-    const auto marginsMM = layout->margins(QPageLayout::Millimeter);
-    m_wkhtmltopdfArgs << "--margin-bottom" << marginToStrMM(marginsMM.bottom());
-    m_wkhtmltopdfArgs << "--margin-left" << marginToStrMM(marginsMM.left());
-    m_wkhtmltopdfArgs << "--margin-right" << marginToStrMM(marginsMM.right());
-    m_wkhtmltopdfArgs << "--margin-top" << marginToStrMM(marginsMM.top());
-
-    // Footer.
-    m_wkhtmltopdfArgs << "--footer-right" << "[page]"
-                      << "--footer-spacing" << QString::number(marginsMM.bottom() / 3, 'f', 2);
-  }
-
-  m_wkhtmltopdfArgs << "--encoding" << "utf-8";
-
-  // Delay 10 seconds for MathJax.
-  m_wkhtmltopdfArgs << "--javascript-delay" << "5000";
-
-  m_wkhtmltopdfArgs << "--enable-local-file-access";
-
-  // Append additional global option.
-  if (!p_pdfOption.m_wkhtmltopdfArgs.isEmpty()) {
-    m_wkhtmltopdfArgs.append(ProcessUtils::parseCombinedArgString(p_pdfOption.m_wkhtmltopdfArgs));
-  }
-
-  if (p_pdfOption.m_addPdfOutline) {
-    m_wkhtmltopdfArgs << "--outline";
-    m_wkhtmltopdfArgs << "--outline-depth" << "6";
-  }
-
-  // Must be put after the global object options.
-  if (p_pdfOption.m_addTableOfContents) {
-    m_wkhtmltopdfArgs << "toc";
-    m_wkhtmltopdfArgs << "--toc-text-size-shrink" << "1.0";
-    m_wkhtmltopdfArgs << "--toc-header-text" << HtmlUtils::unicodeEncode(tr("Table of Contents"));
-  }
 }
 
 bool WebViewExporter::embedStyleResources(QString &p_html) const {
@@ -846,100 +699,4 @@ bool WebViewExporter::doExportPdf(const ExportPdfOption &p_pdfOption, const QStr
   }
 
   return state == ExportState::Finished;
-}
-
-bool WebViewExporter::doExportWkhtmltopdf(const ExportPdfOption &p_pdfOption,
-                                          const QString &p_outputFile, const QUrl &p_baseUrl) {
-  if (p_pdfOption.m_wkhtmltopdfExePath.isEmpty()) {
-    qWarning() << "invalid wkhtmltopdf executable path";
-    return false;
-  }
-
-  ExportState state = ExportState::Busy;
-
-  connect(m_viewer->adapter(), &MarkdownViewerAdapter::contentReady, this,
-          [&, this](const QString &p_headContent, const QString &p_styleContent,
-                    const QString &p_content, const QString &p_bodyClassList) {
-            qDebug() << "doExportWkhtmltopdf contentReady";
-            // Maybe unnecessary. Just to avoid duplicated signal connections.
-            disconnect(m_viewer->adapter(), &MarkdownViewerAdapter::contentReady, this, 0);
-
-            if (p_content.isEmpty() || m_askedToStop) {
-              state = ExportState::Failed;
-              return;
-            }
-
-            // Save HTML to a temp dir.
-            QTemporaryDir tmpDir;
-            if (!tmpDir.isValid()) {
-              state = ExportState::Failed;
-              return;
-            }
-
-            auto tmpHtmlFile = tmpDir.filePath("vnote_export_tmp.html");
-            if (!writeHtmlFile(tmpHtmlFile, p_baseUrl, p_headContent, p_styleContent, p_content,
-                               p_bodyClassList, true, true, false)) {
-              state = ExportState::Failed;
-              return;
-            }
-
-            // Convert HTML to PDF via wkhtmltopdf.
-            if (htmlToPdfViaWkhtmltopdf(p_pdfOption, QStringList() << tmpHtmlFile, p_outputFile)) {
-              state = ExportState::Finished;
-            } else {
-              state = ExportState::Failed;
-            }
-          });
-
-  m_viewer->adapter()->saveContent();
-
-  while (state == ExportState::Busy) {
-    Utils::sleepWait(100);
-
-    if (m_askedToStop) {
-      break;
-    }
-  }
-
-  return state == ExportState::Finished;
-}
-
-bool WebViewExporter::htmlToPdfViaWkhtmltopdf(const ExportPdfOption &p_pdfOption,
-                                              const QStringList &p_htmlFiles,
-                                              const QString &p_outputFile) {
-  QStringList args(m_wkhtmltopdfArgs);
-
-  // Prepare the args.
-  for (auto const &file : p_htmlFiles) {
-    // Note: system's locale settings (Language for non-Unicode programs) is important to
-    // wkhtmltopdf. Input file could be encoded via
-    // QUrl::fromLocalFile(p_htmlFile).toString(QUrl::EncodeUnicode) to handle non-ASCII path. But
-    // for the output file, it is useless.
-    args << QUrl::fromLocalFile(QDir::toNativeSeparators(file)).toString(QUrl::EncodeUnicode);
-  }
-
-  // To handle non-ASCII path, export it to a temp file and then copy it.
-  QTemporaryDir tmpDir;
-  if (!tmpDir.isValid()) {
-    return false;
-  }
-
-  const auto tmpFile = tmpDir.filePath("vx_tmp_output.pdf");
-  args << QDir::toNativeSeparators(tmpFile);
-
-  bool ret = startProcess(QDir::toNativeSeparators(p_pdfOption.m_wkhtmltopdfExePath), args);
-  if (ret && QFileInfo::exists(tmpFile)) {
-    emit logRequested(tr("Copy output file (%1) to (%2).").arg(tmpFile, p_outputFile));
-    FileUtils::copyFile(tmpFile, p_outputFile);
-  }
-
-  return ret;
-}
-
-bool WebViewExporter::startProcess(const QString &p_program, const QStringList &p_args) {
-  emit logRequested(p_program + " " + ProcessUtils::combineArgString(p_args));
-
-  auto ret = ProcessUtils::start(
-      p_program, p_args, [this](const QString &p_log) { emit logRequested(p_log); }, m_askedToStop);
-  return ret == ProcessUtils::State::Succeeded;
 }

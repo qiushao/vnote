@@ -47,20 +47,11 @@ struct ExportPdfOption {
 
   QSharedPointer<QPageLayout> m_layout;
 
-  // Add visible TOC at the front.
-  bool m_addTableOfContents = false;
-
   // Add PDF outline/bookmarks.
   bool m_addPdfOutline = true;
 
-  bool m_useWkhtmltopdf = false;
-
   // Export all source files into one PDF file.
   bool m_allInOne = false;
-
-  QString m_wkhtmltopdfExePath;
-
-  QString m_wkhtmltopdfArgs;
 };
 
 struct ExportCustomOption {

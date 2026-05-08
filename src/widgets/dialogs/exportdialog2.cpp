@@ -511,29 +511,12 @@ void ExportDialog2::setupUI() {
       updatePageLayoutButtonLabel();
     });
 
-    m_addTableOfContentsCheck =
-        WidgetsFactory::createCheckBox(tr("Add visible table of contents"), page);
-    layout->addRow(m_addTableOfContentsCheck);
-
     m_addPdfOutlineCheck = WidgetsFactory::createCheckBox(tr("Add PDF outline"), page);
     layout->addRow(m_addPdfOutlineCheck);
-
-    m_useWkhtmltopdfCheck =
-        WidgetsFactory::createCheckBox(tr("Use wkhtmltopdf (outline supported)"), page);
-    layout->addRow(m_useWkhtmltopdfCheck);
-
-    m_wkhtmltopdfExePathEdit = WidgetsFactory::createLineEdit(page);
-    layout->addRow(tr("Wkhtmltopdf path:"), m_wkhtmltopdfExePathEdit);
-
-    m_wkhtmltopdfArgsEdit = WidgetsFactory::createLineEdit(page);
-    layout->addRow(tr("Wkhtmltopdf arguments:"), m_wkhtmltopdfArgsEdit);
 
     m_pdfAllInOneCheck = WidgetsFactory::createCheckBox(tr("All-in-One"), page);
     m_pdfAllInOneCheck->setToolTip(tr("Export all source files into one file"));
     layout->addRow(m_pdfAllInOneCheck);
-
-    connect(m_useWkhtmltopdfCheck, &QCheckBox::stateChanged, this,
-            [this](int) { updatePdfWidgetsByWkhtmltopdf(); });
 
     m_stackedLayout->addWidget(page);
   }
@@ -757,23 +740,13 @@ void ExportDialog2::restorePdfFields(const ExportPdfOption &p_option) {
   m_pageLayout = p_option.m_layout;
   updatePageLayoutButtonLabel();
 
-  m_addTableOfContentsCheck->setChecked(p_option.m_addTableOfContents);
   m_addPdfOutlineCheck->setChecked(p_option.m_addPdfOutline);
-  m_useWkhtmltopdfCheck->setChecked(p_option.m_useWkhtmltopdf);
-  m_wkhtmltopdfExePathEdit->setText(p_option.m_wkhtmltopdfExePath);
-  m_wkhtmltopdfArgsEdit->setText(p_option.m_wkhtmltopdfArgs);
   m_pdfAllInOneCheck->setChecked(p_option.m_allInOne);
-
-  updatePdfWidgetsByWkhtmltopdf();
 }
 
 void ExportDialog2::savePdfFields(ExportPdfOption &p_option) const {
   p_option.m_layout = m_pageLayout;
-  p_option.m_addTableOfContents = m_addTableOfContentsCheck->isChecked();
   p_option.m_addPdfOutline = m_addPdfOutlineCheck->isChecked();
-  p_option.m_useWkhtmltopdf = m_useWkhtmltopdfCheck->isChecked();
-  p_option.m_wkhtmltopdfExePath = m_wkhtmltopdfExePathEdit->text();
-  p_option.m_wkhtmltopdfArgs = m_wkhtmltopdfArgsEdit->text();
   p_option.m_allInOne = m_pdfAllInOneCheck->isChecked();
 }
 
@@ -925,12 +898,6 @@ void ExportDialog2::onLogRequested(const QString &p_log) {
   m_logEdit->appendPlainText(QStringLiteral(">>> ") + p_log);
   m_logEdit->moveCursor(QTextCursor::End);
   QCoreApplication::sendPostedEvents();
-}
-
-void ExportDialog2::updatePdfWidgetsByWkhtmltopdf() {
-  const bool enabled = m_useWkhtmltopdfCheck->isChecked();
-  m_wkhtmltopdfExePathEdit->setEnabled(enabled);
-  m_wkhtmltopdfArgsEdit->setEnabled(enabled);
 }
 
 void ExportDialog2::updateUiOnExportState(bool p_exporting) {

@@ -35,9 +35,6 @@ public:
 
   void stop();
 
-  bool htmlToPdfViaWkhtmltopdf(const ExportPdfOption &p_pdfOption, const QStringList &p_htmlFiles,
-                               const QString &p_outputFile);
-
 signals:
   void logRequested(const QString &p_log);
 
@@ -69,14 +66,7 @@ private:
 
   QVector<PdfOutlineItem> collectPdfOutlineItems(const ExportPdfOption &p_pdfOption);
 
-  bool doExportWkhtmltopdf(const ExportPdfOption &p_pdfOption, const QString &p_outputFile,
-                           const QUrl &p_baseUrl);
-
   QSize pageLayoutSize(const QPageLayout &p_layout) const;
-
-  void prepareWkhtmltopdfArguments(const ExportPdfOption &p_pdfOption);
-
-  bool startProcess(const QString &p_program, const QStringList &p_args);
 
   bool m_askedToStop = false;
 
@@ -90,8 +80,6 @@ private:
   QString m_htmlTemplate;
 
   QString m_exportHtmlTemplate;
-
-  QStringList m_wkhtmltopdfArgs;
 };
 } // namespace vnotex
 

@@ -68,7 +68,6 @@ private:
   void onProgressUpdated(int p_val, int p_maximum);
   void onLogRequested(const QString &p_log);
 
-  void updatePdfWidgetsByWkhtmltopdf();
   void updateUiOnExportState(bool p_exporting);
 
 private:
@@ -98,11 +97,7 @@ private:
 
   // PDF page.
   QPushButton *m_pageLayoutBtn = nullptr;
-  QCheckBox *m_addTableOfContentsCheck = nullptr;
   QCheckBox *m_addPdfOutlineCheck = nullptr;
-  QCheckBox *m_useWkhtmltopdfCheck = nullptr;
-  QLineEdit *m_wkhtmltopdfExePathEdit = nullptr;
-  QLineEdit *m_wkhtmltopdfArgsEdit = nullptr;
   QCheckBox *m_pdfAllInOneCheck = nullptr;
   QSharedPointer<QPageLayout> m_pageLayout;
 

@@ -49,12 +49,11 @@ struct MarkdownWebGlobalOptions {
 
   int m_bodyHeight = -1;
 
-  // Whether transform inlie SVG to PNG.
-  // For wkhtmltopdf converter, it could not render some inline SVG correctly.
+  // Whether transform inline SVG to PNG.
   // This is just a hint not mandatory. For now, PlantUML and Graphviz needs this.
   bool m_transformSvgToPngEnabled = false;
 
-  // wkhtmltopdf will make the MathJax formula too small.
+  // Optional MathJax scale override. A negative value means using the default scale.
   qreal m_mathJaxScale = -1;
 
   // Whether remove the tool bar of code blocks added by Prism.js.
