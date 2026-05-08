@@ -27,6 +27,7 @@ add_qt_test(test_exportcontroller
     test_exportcontroller.cpp
     ${CMAKE_SOURCE_DIR}/src/controllers/exportcontroller.cpp
     ${CMAKE_SOURCE_DIR}/src/export/exportdata.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/summaryfileparser.cpp
   LINKS
     core_services
     vxcore

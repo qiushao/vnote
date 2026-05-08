@@ -79,6 +79,7 @@ target_sources(vnote PRIVATE
     searchresulttypes.cpp searchresulttypes.h
     sessionconfig.cpp sessionconfig.h
     singleinstanceguard.cpp singleinstanceguard.h
+    summaryfileparser.cpp summaryfileparser.h
     templatemgr.cpp templatemgr.h
     texteditorconfig.cpp texteditorconfig.h
     theme.cpp theme.h

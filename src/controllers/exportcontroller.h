@@ -46,6 +46,13 @@ private:
   QString normalizedRelativePath(const QString &p_relativePath) const;
   QString notebookBatchName(const QString &p_notebookId) const;
   QString folderBatchName(const QString &p_notebookId, const QString &p_folderPath) const;
+  void collectExportFilesFromSummary(const QString &p_notebookId,
+                                     const QString &p_folderPath,
+                                     const QString &p_summaryPath,
+                                     bool p_recursive, bool p_exportAttachments,
+                                     bool p_includeFolderHeadings, int p_baseHeadingLevel,
+                                     const QString &p_excludedOutputDir,
+                                     QVector<ExportFileInfo> &p_files);
 
   ServiceLocator &m_services;
   QPointer<QWidget> m_widgetParent;

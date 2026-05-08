@@ -13,6 +13,7 @@
 
 #include <core/exception.h>
 #include <core/servicelocator.h>
+#include <core/summaryfileparser.h>
 #include <core/services/filetypecoreservice.h>
 #include <core/services/notebookcoreservice.h>
 #include <export/exporter.h>
@@ -434,6 +435,91 @@ Exporter *ExportController::ensureExporter() {
   return m_exporter;
 }
 
+void ExportController::collectExportFilesFromSummary(const QString &p_notebookId,
+                                                     const QString &p_folderPath,
+                                                     const QString &p_summaryPath,
+                                                     bool p_recursive, bool p_exportAttachments,
+                                                     bool p_includeFolderHeadings,
+                                                     int p_baseHeadingLevel,
+                                                     const QString &p_excludedOutputDir,
+                                                     QVector<ExportFileInfo> &p_files) {
+  auto *notebookService = m_services.get<NotebookCoreService>();
+  if (!notebookService) {
+    emit logRequested(tr("NotebookCoreService not available."));
+    return;
+  }
+
+  const auto entries = SummaryFileParser::parse(p_summaryPath);
+  if (entries.isEmpty()) {
+    return;
+  }
+
+  const auto folderPath = normalizedRelativePath(p_folderPath);
+  const auto absoluteFolderPath = notebookService->buildAbsolutePath(p_notebookId, folderPath);
+
+  for (const auto &entry : entries) {
+    const auto fullPath = QDir::cleanPath(absoluteFolderPath + QLatin1Char('/') + entry.m_relativePath);
+
+    QFileInfo info(fullPath);
+    if (!info.exists() || info.isSymLink()) {
+      continue;
+    }
+
+    if (isPathUnderDirectory(fullPath, p_excludedOutputDir)) {
+      continue;
+    }
+
+    const int headingLevel = p_baseHeadingLevel + entry.m_indentLevel;
+
+    if (info.isDir()) {
+      if (!p_recursive) {
+        continue;
+      }
+
+      if (p_includeFolderHeadings) {
+        // Check if this directory has any exportable content before adding heading.
+        QVector<ExportFileInfo> childFiles;
+        collectExportFiles(p_notebookId, folderPath.isEmpty() ? entry.m_relativePath
+                                                              : folderPath + QLatin1Char('/') + entry.m_relativePath,
+                           p_recursive, p_exportAttachments, p_includeFolderHeadings,
+                           headingLevel + 1, p_excludedOutputDir, childFiles);
+        if (!childFiles.isEmpty()) {
+          appendFolderHeading(entry.m_displayText, headingLevel, p_files);
+          p_files += childFiles;
+        }
+      } else {
+        collectExportFiles(p_notebookId, folderPath.isEmpty() ? entry.m_relativePath
+                                                              : folderPath + QLatin1Char('/') + entry.m_relativePath,
+                           p_recursive, p_exportAttachments, p_includeFolderHeadings,
+                           headingLevel + 1, p_excludedOutputDir, p_files);
+      }
+      continue;
+    }
+
+    if (!info.isFile()) {
+      continue;
+    }
+
+    const bool isMarkdown = isMarkdownFile(fullPath);
+    if (p_includeFolderHeadings && !isMarkdown) {
+      continue;
+    }
+
+    ExportFileInfo fileInfo;
+    fileInfo.filePath = fullPath;
+    fileInfo.fileName = info.fileName();
+    fileInfo.resourcePath = info.absolutePath();
+    fileInfo.attachmentFolderPath =
+        p_exportAttachments ? notebookService->getAttachmentsFolder(p_notebookId,
+            folderPath.isEmpty() ? entry.m_relativePath
+                                 : folderPath + QLatin1Char('/') + entry.m_relativePath)
+                            : QString();
+    fileInfo.isMarkdown = isMarkdown;
+    fileInfo.headingLevelOffset = p_includeFolderHeadings ? qMax(0, entry.m_indentLevel) : 0;
+    p_files.append(fileInfo);
+  }
+}
+
 void ExportController::collectExportFiles(const QString &p_notebookId, const QString &p_folderPath,
                                           bool p_recursive, bool p_exportAttachments,
                                           bool p_includeFolderHeadings, int p_folderHeadingLevel,
@@ -446,9 +532,18 @@ void ExportController::collectExportFiles(const QString &p_notebookId, const QSt
   }
 
   const auto folderPath = normalizedRelativePath(p_folderPath);
+  const auto absoluteFolderPath = notebookService->buildAbsolutePath(p_notebookId, folderPath);
+  const QString summaryPath = absoluteFolderPath + QLatin1String("/SUMMARY.md");
+  if (QFileInfo::exists(summaryPath) &&
+      p_includeFolderHeadings) {
+    collectExportFilesFromSummary(p_notebookId, folderPath, summaryPath, p_recursive,
+                                  p_exportAttachments, p_includeFolderHeadings,
+                                  p_folderHeadingLevel, p_excludedOutputDir, p_files);
+    return;
+  }
+
   const auto children = notebookService->listFolderChildren(p_notebookId, folderPath);
   const auto externalChildren = notebookService->listFolderExternal(p_notebookId, folderPath);
-  const auto absoluteFolderPath = notebookService->buildAbsolutePath(p_notebookId, folderPath);
   const auto config = notebookService->getNotebookConfig(p_notebookId);
   const auto assetsFolder =
       config.value(QStringLiteral("assetsFolder")).toString(QStringLiteral("vx_assets"));
