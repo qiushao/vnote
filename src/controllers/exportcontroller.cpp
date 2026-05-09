@@ -142,7 +142,9 @@ QList<NodeIdentifier> sortedNodeIds(QList<NodeIdentifier> p_nodeIds) {
   return p_nodeIds;
 }
 
-void appendFolderHeading(const QString &p_title, int p_level, QVector<ExportFileInfo> &p_files) {
+void appendFolderHeading(const QString &p_title, int p_level, QVector<ExportFileInfo> &p_files,
+                         const QString &p_pdfOutlineTitle = QString(),
+                         int p_pdfOutlineLevel = 0) {
   const auto title = p_title.trimmed();
   if (title.isEmpty()) {
     return;
@@ -152,6 +154,8 @@ void appendFolderHeading(const QString &p_title, int p_level, QVector<ExportFile
   info.isSectionHeading = true;
   info.sectionTitle = title;
   info.sectionLevel = qBound(1, p_level, 6);
+  info.pdfOutlineTitle = p_pdfOutlineTitle.trimmed();
+  info.pdfOutlineLevel = qBound(0, p_pdfOutlineLevel, 6);
   p_files.append(info);
 }
 
@@ -470,6 +474,7 @@ void ExportController::collectExportFilesFromSummary(const QString &p_notebookId
     }
 
     const int headingLevel = p_baseHeadingLevel + entry.m_indentLevel;
+    const int summaryOutlineLevel = qBound(1, p_baseHeadingLevel - 1 + entry.m_indentLevel, 6);
 
     if (info.isDir()) {
       if (!p_recursive) {
@@ -484,7 +489,8 @@ void ExportController::collectExportFilesFromSummary(const QString &p_notebookId
                            p_recursive, p_exportAttachments, p_includeFolderHeadings,
                            headingLevel + 1, p_excludedOutputDir, childFiles);
         if (!childFiles.isEmpty()) {
-          appendFolderHeading(entry.m_displayText, headingLevel, p_files);
+          appendFolderHeading(entry.m_displayText, headingLevel, p_files, entry.m_displayText,
+                              summaryOutlineLevel);
           p_files += childFiles;
         }
       } else {
@@ -516,6 +522,8 @@ void ExportController::collectExportFilesFromSummary(const QString &p_notebookId
                             : QString();
     fileInfo.isMarkdown = isMarkdown;
     fileInfo.headingLevelOffset = p_includeFolderHeadings ? qMax(0, entry.m_indentLevel) : 0;
+    fileInfo.pdfOutlineTitle = entry.m_displayText;
+    fileInfo.pdfOutlineLevel = summaryOutlineLevel;
     p_files.append(fileInfo);
   }
 }

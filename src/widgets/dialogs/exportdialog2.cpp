@@ -511,8 +511,37 @@ void ExportDialog2::setupUI() {
       updatePageLayoutButtonLabel();
     });
 
-    m_addPdfOutlineCheck = WidgetsFactory::createCheckBox(tr("Add PDF outline"), page);
+    m_addPdfOutlineCheck = WidgetsFactory::createCheckBox(tr("Add PDF index"), page);
     layout->addRow(m_addPdfOutlineCheck);
+
+    auto *subOptionWidget = new QWidget(page);
+    auto *subOptionLayout = new QHBoxLayout(subOptionWidget);
+    subOptionLayout->setContentsMargins(20, 0, 0, 0);
+
+    m_addMarkdownHeadingsToPdfOutlineCheck =
+        WidgetsFactory::createCheckBox(tr("Add Markdown headings"), subOptionWidget);
+    subOptionLayout->addWidget(m_addMarkdownHeadingsToPdfOutlineCheck);
+
+    subOptionLayout->addWidget(new QLabel(tr("Heading level:"), subOptionWidget));
+    m_pdfOutlineHeadingLevelCombo = WidgetsFactory::createComboBox(subOptionWidget);
+    for (int i = 1; i <= 6; ++i) {
+      m_pdfOutlineHeadingLevelCombo->addItem(tr("Up to %1").arg(QString(i, QLatin1Char('#'))),
+                                             i);
+    }
+    subOptionLayout->addWidget(m_pdfOutlineHeadingLevelCombo);
+    subOptionLayout->addStretch();
+    layout->addRow(subOptionWidget);
+
+    const auto updatePdfIndexSubOptions = [this]() {
+      const bool addPdfIndex = m_addPdfOutlineCheck->isChecked();
+      m_addMarkdownHeadingsToPdfOutlineCheck->setEnabled(addPdfIndex);
+      m_pdfOutlineHeadingLevelCombo->setEnabled(
+          addPdfIndex && m_addMarkdownHeadingsToPdfOutlineCheck->isChecked());
+    };
+    connect(m_addPdfOutlineCheck, &QCheckBox::stateChanged, this,
+            [updatePdfIndexSubOptions](int) { updatePdfIndexSubOptions(); });
+    connect(m_addMarkdownHeadingsToPdfOutlineCheck, &QCheckBox::stateChanged, this,
+            [updatePdfIndexSubOptions](int) { updatePdfIndexSubOptions(); });
 
     m_pdfAllInOneCheck = WidgetsFactory::createCheckBox(tr("All-in-One"), page);
     m_pdfAllInOneCheck->setToolTip(tr("Export all source files into one file"));
@@ -741,12 +770,23 @@ void ExportDialog2::restorePdfFields(const ExportPdfOption &p_option) {
   updatePageLayoutButtonLabel();
 
   m_addPdfOutlineCheck->setChecked(p_option.m_addPdfOutline);
+  m_addMarkdownHeadingsToPdfOutlineCheck->setChecked(p_option.m_addMarkdownHeadingsToPdfOutline);
+  const int idx = m_pdfOutlineHeadingLevelCombo->findData(p_option.m_pdfOutlineHeadingLevel);
+  if (idx != -1) {
+    m_pdfOutlineHeadingLevelCombo->setCurrentIndex(idx);
+  }
+  m_addMarkdownHeadingsToPdfOutlineCheck->setEnabled(p_option.m_addPdfOutline);
+  m_pdfOutlineHeadingLevelCombo->setEnabled(p_option.m_addPdfOutline &&
+                                            p_option.m_addMarkdownHeadingsToPdfOutline);
   m_pdfAllInOneCheck->setChecked(p_option.m_allInOne);
 }
 
 void ExportDialog2::savePdfFields(ExportPdfOption &p_option) const {
   p_option.m_layout = m_pageLayout;
   p_option.m_addPdfOutline = m_addPdfOutlineCheck->isChecked();
+  p_option.m_addMarkdownHeadingsToPdfOutline =
+      m_addMarkdownHeadingsToPdfOutlineCheck->isChecked();
+  p_option.m_pdfOutlineHeadingLevel = m_pdfOutlineHeadingLevelCombo->currentData().toInt();
   p_option.m_allInOne = m_pdfAllInOneCheck->isChecked();
 }
 

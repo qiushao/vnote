@@ -21,6 +21,8 @@ struct ExportFileInfo {
   QString attachmentFolderPath;
   bool isMarkdown = true;
   int headingLevelOffset = 0;
+  QString pdfOutlineTitle;
+  int pdfOutlineLevel = 0;
 };
 
 class Exporter : public QObject {

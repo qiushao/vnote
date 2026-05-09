@@ -146,9 +146,11 @@ QStringList Exporter::doExportBatch(const ExportOption &, const QVector<ExportFi
   QStringList files;
   for (const auto &file : p_files) {
     if (!file.isSectionHeading) {
-      files << QStringLiteral("%1|headingLevelOffset=%2")
+      files << QStringLiteral("%1|headingLevelOffset=%2|pdfOutlineTitle=%3|pdfOutlineLevel=%4")
                    .arg(file.filePath)
-                   .arg(file.headingLevelOffset);
+                   .arg(file.headingLevelOffset)
+                   .arg(file.pdfOutlineTitle)
+                   .arg(file.pdfOutlineLevel);
     }
   }
   return files;
@@ -172,6 +174,7 @@ private slots:
   void testMarkdownExportExternalBuffer();
   void testMarkdownExportDiskBased();
   void testAllInOneFolderExportIncludesExternalFilesystemFiles();
+  void testAllInOneFolderExportUsesSummaryForPdfIndex();
   void testFolderExportSkipsStaleAndEscapedIndexedEntries();
   void testEmptyContextHandling();
 
@@ -440,6 +443,55 @@ void TestExportController::testAllInOneFolderExportIncludesExternalFilesystemFil
       outputFiles.at(0).contains(QStringLiteral("external_folder/2.md|headingLevelOffset=1")));
   QVERIFY(
       outputFiles.at(1).contains(QStringLiteral("external_folder/sub/1.md|headingLevelOffset=2")));
+}
+
+void TestExportController::testAllInOneFolderExportUsesSummaryForPdfIndex() {
+  ControllerFixture fixture(m_ctx);
+
+  QDir rootDir(m_notebookRoot);
+  QVERIFY(rootDir.mkpath(QStringLiteral("summary_folder/sub")));
+
+  QFile first(rootDir.filePath(QStringLiteral("summary_folder/a.md")));
+  QVERIFY(first.open(QIODevice::WriteOnly));
+  first.write("# Ignored Markdown Heading\n");
+  first.close();
+
+  QFile second(rootDir.filePath(QStringLiteral("summary_folder/sub/b.md")));
+  QVERIFY(second.open(QIODevice::WriteOnly));
+  second.write("# Ignored Nested Heading\n");
+  second.close();
+
+  QFile summary(rootDir.filePath(QStringLiteral("summary_folder/SUMMARY.md")));
+  QVERIFY(summary.open(QIODevice::WriteOnly));
+  summary.write("- [Summary A](a.md)\n  - [Summary B](sub/b.md)\n");
+  summary.close();
+
+  TempDirFixture outputDir;
+  QVERIFY(outputDir.isValid());
+
+  vnotex::ExportContext context;
+  context.currentFolderId = vnotex::NodeIdentifier{m_notebookId, QStringLiteral("summary_folder")};
+  context.presetSource = vnotex::ExportSource::CurrentFolder;
+
+  vnotex::ExportOption option;
+  option.m_source = vnotex::ExportSource::CurrentFolder;
+  option.m_targetFormat = vnotex::ExportFormat::PDF;
+  option.m_outputDir = outputDir.path();
+  option.m_recursive = true;
+  option.m_exportAttachments = false;
+  option.m_pdfOption.m_allInOne = true;
+  option.m_pdfOption.m_addMarkdownHeadingsToPdfOutline = false;
+
+  QSignalSpy finishedSpy(fixture.controller, &vnotex::ExportController::exportFinished);
+  fixture.controller->doExport(option, context);
+
+  QCOMPARE(finishedSpy.count(), 1);
+  const QStringList outputFiles = finishedSpy.takeFirst().at(0).toStringList();
+  QCOMPARE(outputFiles.size(), 2);
+  QVERIFY(outputFiles.at(0).contains(
+      QStringLiteral("pdfOutlineTitle=Summary A|pdfOutlineLevel=1")));
+  QVERIFY(outputFiles.at(1).contains(
+      QStringLiteral("pdfOutlineTitle=Summary B|pdfOutlineLevel=2")));
 }
 
 void TestExportController::testFolderExportSkipsStaleAndEscapedIndexedEntries() {

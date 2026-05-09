@@ -2435,8 +2435,23 @@ Backup file last modified time: %2</source>
     </message>
     <message>
         <location filename="../../../widgets/dialogs/exportdialog.cpp" line="617"/>
-        <source>Add PDF outline</source>
-        <translation>添加 PDF 大纲</translation>
+        <source>Add PDF index</source>
+        <translation>添加 PDF 索引</translation>
+    </message>
+    <message>
+        <location filename="../../../widgets/dialogs/exportdialog.cpp" line="630"/>
+        <source>Add Markdown headings</source>
+        <translation>添加 Markdown 标题</translation>
+    </message>
+    <message>
+        <location filename="../../../widgets/dialogs/exportdialog.cpp" line="633"/>
+        <source>Heading level:</source>
+        <translation>标题级别:</translation>
+    </message>
+    <message>
+        <location filename="../../../widgets/dialogs/exportdialog.cpp" line="637"/>
+        <source>Up to %1</source>
+        <translation>到 %1</translation>
     </message>
     <message>
         <location filename="../../../widgets/dialogs/exportdialog.cpp" line="625"/>
@@ -2913,8 +2928,23 @@ Backup file last modified time: %2</source>
     </message>
     <message>
         <location filename="../../../widgets/dialogs/exportdialog2.cpp" line="465"/>
-        <source>Add PDF outline</source>
-        <translation>添加 PDF 大纲</translation>
+        <source>Add PDF index</source>
+        <translation>添加 PDF 索引</translation>
+    </message>
+    <message>
+        <location filename="../../../widgets/dialogs/exportdialog2.cpp" line="523"/>
+        <source>Add Markdown headings</source>
+        <translation>添加 Markdown 标题</translation>
+    </message>
+    <message>
+        <location filename="../../../widgets/dialogs/exportdialog2.cpp" line="526"/>
+        <source>Heading level:</source>
+        <translation>标题级别:</translation>
+    </message>
+    <message>
+        <location filename="../../../widgets/dialogs/exportdialog2.cpp" line="529"/>
+        <source>Up to %1</source>
+        <translation>到 %1</translation>
     </message>
     <message>
         <location filename="../../../widgets/dialogs/exportdialog2.cpp" line="469"/>

@@ -78,6 +78,8 @@ ExportPdfOption::ExportPdfOption()
 QJsonObject ExportPdfOption::toJson() const {
   QJsonObject obj;
   obj["addPdfOutline"] = m_addPdfOutline;
+  obj["addMarkdownHeadingsToPdfOutline"] = m_addMarkdownHeadingsToPdfOutline;
+  obj["pdfOutlineHeadingLevel"] = m_pdfOutlineHeadingLevel;
   obj["allInOne"] = m_allInOne;
   obj["layout"] = pageLayoutToJsonObject(*m_layout);
   return obj;
@@ -94,12 +96,17 @@ void ExportPdfOption::fromJson(const QJsonObject &p_obj) {
     // Legacy configs used addTableOfContents to control outline export.
     m_addPdfOutline = p_obj["addTableOfContents"].toBool(true);
   }
+  m_addMarkdownHeadingsToPdfOutline = p_obj["addMarkdownHeadingsToPdfOutline"].toBool(true);
+  m_pdfOutlineHeadingLevel = qBound(1, p_obj["pdfOutlineHeadingLevel"].toInt(3), 6);
   m_allInOne = p_obj["allInOne"].toBool();
   jsonObjectToPageLayout(p_obj["layout"].toObject(), *m_layout);
 }
 
 bool ExportPdfOption::operator==(const ExportPdfOption &p_other) const {
-  return m_addPdfOutline == p_other.m_addPdfOutline && m_allInOne == p_other.m_allInOne;
+  return m_addPdfOutline == p_other.m_addPdfOutline &&
+         m_addMarkdownHeadingsToPdfOutline == p_other.m_addMarkdownHeadingsToPdfOutline &&
+         m_pdfOutlineHeadingLevel == p_other.m_pdfOutlineHeadingLevel &&
+         m_allInOne == p_other.m_allInOne;
 }
 
 QJsonObject ExportCustomOption::toJson() const {

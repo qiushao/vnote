@@ -98,6 +98,8 @@ private:
   // PDF page.
   QPushButton *m_pageLayoutBtn = nullptr;
   QCheckBox *m_addPdfOutlineCheck = nullptr;
+  QCheckBox *m_addMarkdownHeadingsToPdfOutlineCheck = nullptr;
+  QComboBox *m_pdfOutlineHeadingLevelCombo = nullptr;
   QCheckBox *m_pdfAllInOneCheck = nullptr;
   QSharedPointer<QPageLayout> m_pageLayout;
 

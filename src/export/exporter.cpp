@@ -65,6 +65,22 @@ QString sectionHeadingMarkdown(const ExportFileInfo &p_file) {
       .arg(QString(qBound(1, p_file.sectionLevel, 6), QLatin1Char('#')), title);
 }
 
+QString pdfIndexMarkerMarkdown(const ExportFileInfo &p_file) {
+  auto title = p_file.pdfOutlineTitle.trimmed();
+  title.replace(QRegularExpression(QStringLiteral("[\\r\\n]+")), QStringLiteral(" "));
+  if (title.isEmpty() || p_file.pdfOutlineLevel <= 0) {
+    return QString();
+  }
+
+  auto attrTitle = title.toHtmlEscaped();
+  attrTitle.replace(QLatin1Char('"'), QStringLiteral("&quot;"));
+  return QStringLiteral(
+             "\n\n<div data-vx-pdf-index-title=\"%1\" data-vx-pdf-index-level=\"%2\" "
+             "style=\"height:0;overflow:hidden;\"></div>\n\n")
+      .arg(attrTitle)
+      .arg(qBound(1, p_file.pdfOutlineLevel, 6));
+}
+
 bool isFenceLine(const QString &p_line, QChar &p_marker, int &p_markerCount) {
   int idx = 0;
   while (idx < p_line.size() && idx < 3 && p_line[idx] == QLatin1Char(' ')) {
@@ -381,6 +397,8 @@ QString Exporter::doExportPdfAllInOne(const ExportOption &p_option,
 
   QString combinedContent;
   bool previousWasHeading = false;
+  const bool useSummaryPdfIndex = p_option.m_pdfOption.m_addPdfOutline &&
+                                  !p_option.m_pdfOption.m_addMarkdownHeadingsToPdfOutline;
   emit progressUpdated(0, p_files.size());
   for (int i = 0; i < p_files.size(); ++i) {
     if (checkAskedToStop()) {
@@ -389,6 +407,9 @@ QString Exporter::doExportPdfAllInOne(const ExportOption &p_option,
 
     if (p_files[i].isSectionHeading) {
       appendAllInOneSeparator(combinedContent, previousWasHeading);
+      if (useSummaryPdfIndex) {
+        combinedContent += pdfIndexMarkerMarkdown(p_files[i]);
+      }
       combinedContent += sectionHeadingMarkdown(p_files[i]);
       previousWasHeading = true;
       emit progressUpdated(i + 1, p_files.size());
@@ -403,6 +424,9 @@ QString Exporter::doExportPdfAllInOne(const ExportOption &p_option,
       }
 
       appendAllInOneSeparator(combinedContent, previousWasHeading);
+      if (useSummaryPdfIndex) {
+        combinedContent += pdfIndexMarkerMarkdown(p_files[i]);
+      }
       combinedContent += content;
       previousWasHeading = false;
     } catch (const Exception &e) {

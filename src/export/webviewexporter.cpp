@@ -604,33 +604,49 @@ QVector<PdfOutlineItem> WebViewExporter::collectPdfOutlineItems(
 
   ExportState state = ExportState::Busy;
   const auto pageHeight = pageLayoutSize(*p_pdfOption.m_layout).height();
+  const int headingLevel = qBound(1, p_pdfOption.m_pdfOutlineHeadingLevel, 6);
+  const int useMarkdownHeadings = p_pdfOption.m_addMarkdownHeadingsToPdfOutline ? 1 : 0;
   const auto script = QStringLiteral(R"JS(
-(function(pageHeight) {
-  var headings = Array.prototype.slice.call(document.querySelectorAll('h1,h2,h3,h4,h5,h6'));
-  return headings.map(function(heading) {
-    var text = (heading.innerText || heading.textContent || '').trim();
+(function(pageHeight, maxHeadingLevel, useMarkdownHeadings) {
+  var elements = useMarkdownHeadings
+    ? Array.prototype.slice.call(document.querySelectorAll('h1,h2,h3,h4,h5,h6'))
+    : Array.prototype.slice.call(document.querySelectorAll('[data-vx-pdf-index-title]'));
+  return elements.map(function(element) {
+    var text = useMarkdownHeadings
+      ? (element.innerText || element.textContent || '').trim()
+      : (element.getAttribute('data-vx-pdf-index-title') || '').trim();
     if (!text) {
       return null;
     }
 
-    var style = window.getComputedStyle(heading);
+    var level = useMarkdownHeadings
+      ? parseInt(element.tagName.substring(1), 10)
+      : parseInt(element.getAttribute('data-vx-pdf-index-level') || '1', 10);
+    level = Math.max(1, Math.min(6, level || 1));
+    if (useMarkdownHeadings && level > maxHeadingLevel) {
+      return null;
+    }
+
+    var style = window.getComputedStyle(element);
     if (style.display === 'none' || style.visibility === 'hidden') {
       return null;
     }
 
-    var rect = heading.getBoundingClientRect();
+    var rect = element.getBoundingClientRect();
     var top = rect.top + window.scrollY;
     return {
       title: text,
-      level: parseInt(heading.tagName.substring(1), 10),
+      level: level,
       page: Math.max(0, Math.floor(top / pageHeight))
     };
   }).filter(function(item) {
     return item !== null;
   });
-})(%1);
+})(%1, %2, %3);
 )JS")
-                          .arg(qMax(1, pageHeight));
+                          .arg(qMax(1, pageHeight))
+                          .arg(headingLevel)
+                          .arg(useMarkdownHeadings);
 
   m_viewer->page()->runJavaScript(script, [&, this](const QVariant &p_result) {
     const auto list = p_result.toList();

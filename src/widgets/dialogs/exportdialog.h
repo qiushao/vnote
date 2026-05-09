@@ -163,6 +163,10 @@ private:
 
   QCheckBox *m_addPdfOutlineCheckBox = nullptr;
 
+  QCheckBox *m_addMarkdownHeadingsToPdfOutlineCheckBox = nullptr;
+
+  QComboBox *m_pdfOutlineHeadingLevelComboBox = nullptr;
+
   QCheckBox *m_allInOneCheckBox = nullptr;
 
   QSharedPointer<QPageLayout> m_pageLayout;

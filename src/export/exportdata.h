@@ -47,8 +47,14 @@ struct ExportPdfOption {
 
   QSharedPointer<QPageLayout> m_layout;
 
-  // Add PDF outline/bookmarks.
+  // Add PDF index/bookmarks.
   bool m_addPdfOutline = true;
+
+  // Add Markdown headings to PDF index/bookmarks.
+  bool m_addMarkdownHeadingsToPdfOutline = true;
+
+  // Maximum Markdown heading level to add to PDF index/bookmarks.
+  int m_pdfOutlineHeadingLevel = 3;
 
   // Export all source files into one PDF file.
   bool m_allInOne = false;
